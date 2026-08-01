@@ -382,6 +382,18 @@ async function startBot() {
         }
     });
 
+    sock.ev.on('message-receipt.update', (receipts) => {
+        for (const r of receipts) {
+            console.log(`[RECEIPT] Message ID ${r.key.id} to ${r.key.remoteJid}: receipt=${JSON.stringify(r.receipt)}`);
+        }
+    });
+
+    sock.ev.on('messages.update', (updates) => {
+        for (const u of updates) {
+            console.log(`[MSG_UPDATE] Message ID ${u.key.id} to ${u.key.remoteJid}: update=${JSON.stringify(u.update)}`);
+        }
+    });
+
     sock.ev.on('messages.upsert', async (m) => {
         try {
             console.log(`[UPSERT] Event type: ${m.type}, messages count: ${m.messages.length}`);
@@ -432,27 +444,10 @@ async function startBot() {
 
                     const command = commands.get(commandName);
                     if (command) {
-                        let effectiveJid = sender;
-                        if (sender && sender.endsWith('@lid')) {
-                            console.log(`[LID_DEBUG] msg.key properties:`, JSON.stringify(msg.key));
-                            const phoneJid = msg.key.remoteJidAlt || msg.key.participantAlt || msg.key.participant;
-                            if (phoneJid && phoneJid.endsWith('@s.whatsapp.net')) {
-                                effectiveJid = phoneJid;
-                                console.log(`[JID_FIX] Converted LID '${sender}' -> Phone JID '${effectiveJid}'`);
-                            } else {
-                                console.log(`[JID_FIX] Warning: Received message from LID '${sender}' without phone JID mapping. Responding directly to LID.`);
-                            }
-                        }
+                        console.log(`[EXEC] Executing '${commandName}' for target JID: ${sender}`);
 
-                        console.log(`[EXEC] Executing '${commandName}' for ${effectiveJid} (Multi-command block)`);
-
-                        // Clone message object with normalized key and specific command block body
                         const mockMsg = {
                             ...msg,
-                            key: {
-                                ...msg.key,
-                                remoteJid: effectiveJid
-                            },
                             message: {
                                 ...msg.message,
                                 conversation: block,
@@ -465,11 +460,11 @@ async function startBot() {
 
                         try {
                             await command.execute(sock, mockMsg, args);
-                            console.log(`[OUT] Command '${commandName}' executed successfully`);
+                            console.log(`[OUT] Command '${commandName}' executed successfully for ${sender}`);
                         } catch (cmdErr) {
-                            console.error(`[EXEC_ERR] Error executing command '${commandName}':`, cmdErr);
+                            console.error(`[EXEC_ERR] Error executing command '${commandName}' for ${sender}:`, cmdErr);
                             try {
-                                await sock.sendMessage(effectiveJid, { text: `❌ Error command /${commandName}: ${cmdErr.message}` });
+                                await sock.sendMessage(sender, { text: `❌ Error command /${commandName}: ${cmdErr.message}` });
                             } catch (e) {}
                         }
                     } else {

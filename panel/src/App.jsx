@@ -124,8 +124,8 @@ export default function App() {
       {/* Top Header */}
       <header className="top-bar">
         <div className="top-brand">
-          <span className="top-brand-badge">PRO</span>
-          <h1>WABOT CONTROL</h1>
+          <span className="top-brand-badge">by Chaniago</span>
+          <h1>Whatsapp Bot Console</h1>
         </div>
         <span className={`status-pill ${status.waBot.connected ? '' : 'offline'}`}>
           {status.waBot.connected ? '● LIVE' : '○ OFFLINE'}

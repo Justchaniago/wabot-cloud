@@ -41,6 +41,8 @@ _Bot Cloud-Native Serverless 24/7_ 🚀
         `.trim();
 
         // Send as pure text (no quoted option to ensure robust E2EE instant delivery)
-        await sock.sendMessage(jid, { text: textResponse });
+        console.log(`[STATUS_CMD] Attempting sendMessage to JID: ${jid}`);
+        const res = await sock.sendMessage(jid, { text: textResponse });
+        console.log(`[STATUS_CMD] sendMessage succeeded for ${jid}: messageId=${res?.key?.id}`);
     }
 };

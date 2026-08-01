@@ -39,6 +39,7 @@ async function useFirestoreAuthState(db, collectionName = 'whatsapp_sessions', s
                         }
                     } catch (err) {
                         console.error(`[FIRESTORE_KEYSTORE] Error reading key ${type}-${id}:`, err.message);
+                        throw err;
                     }
                 })
             );
@@ -50,41 +51,33 @@ async function useFirestoreAuthState(db, collectionName = 'whatsapp_sessions', s
 
             for (const category in data) {
                 for (const id in data[category]) {
-                    try {
-                        const value = data[category][id];
-                        const docId = sanitizeKey(category, id);
-                        const keyDocRef = keysRef.doc(docId);
+                    const value = data[category][id];
+                    const docId = sanitizeKey(category, id);
+                    const keyDocRef = keysRef.doc(docId);
 
-                        if (value) {
-                            const serialized = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
-                            batch.set(keyDocRef, {
-                                value: serialized,
-                                category,
-                                id,
-                                updatedAt: new Date().toISOString()
-                            });
-                        } else {
-                            batch.delete(keyDocRef);
-                        }
-                        count++;
+                    if (value) {
+                        const serialized = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
+                        batch.set(keyDocRef, {
+                            value: serialized,
+                            category,
+                            id,
+                            updatedAt: new Date().toISOString()
+                        });
+                    } else {
+                        batch.delete(keyDocRef);
+                    }
+                    count++;
 
-                        if (count >= 400) {
-                            await batch.commit();
-                            batch = db.batch();
-                            count = 0;
-                        }
-                    } catch (err) {
-                        console.error(`[FIRESTORE_KEYSTORE] Error writing key ${category}-${id}:`, err.message);
+                    if (count >= 400) {
+                        await batch.commit();
+                        batch = db.batch();
+                        count = 0;
                     }
                 }
             }
 
             if (count > 0) {
-                try {
-                    await batch.commit();
-                } catch (err) {
-                    console.error('[FIRESTORE_KEYSTORE] Batch commit error:', err.message);
-                }
+                await batch.commit();
             }
         }
     };
