@@ -1,8 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@500;700;800&display=swap');
 
 :root {
-  --bg-main: #f0f3f8;
-  --bg-card: #ffffff;
+  --bg-main: #f0ede6; /* Soft warm ivory background */
+  --bg-card: #fcfbf7; /* Warm Ivory card background */
   --text-main: #0f172a;
   
   --neo-lime: #a3e635;
@@ -64,7 +64,7 @@ html, body {
   justify-content: space-between;
   margin-bottom: 8px;
   flex-shrink: 0;
-  color: #ffffff;
+  color: #fefcf0; /* Warm Cream Text */
 }
 
 .top-brand {
@@ -93,6 +93,7 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: #fefcf0; /* Warm Cream Text */
 }
 
 /* Status Pill */
@@ -109,7 +110,7 @@ html, body {
 
 .status-pill.offline {
   background: var(--neo-pink);
-  color: white;
+  color: #fefcf0;
 }
 
 /* Bottom / Top Nav Tabs */
@@ -123,7 +124,7 @@ html, body {
 }
 
 .tab-item {
-  background: #ffffff;
+  background: #fcfbf7; /* Warm Ivory instead of pure white */
   border: 2px solid #0f172a;
   color: #0f172a;
   padding: 10px 4px;
