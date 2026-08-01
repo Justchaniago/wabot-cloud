@@ -310,6 +310,9 @@ async function startBot() {
         auth: state,
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 250,
         getMessage: async (key) => {
             if (messageStore.has(key.id)) {
                 return messageStore.get(key.id);
@@ -422,10 +425,12 @@ async function startBot() {
                     if (command) {
                         let effectiveJid = sender;
                         if (sender && sender.endsWith('@lid')) {
-                            const phoneJid = msg.key.participantAlt || msg.key.participant;
+                            const phoneJid = msg.key.remoteJidAlt || msg.key.participantAlt || msg.key.participant;
                             if (phoneJid && phoneJid.endsWith('@s.whatsapp.net')) {
                                 effectiveJid = phoneJid;
                                 console.log(`[JID_FIX] Converted LID '${sender}' -> Phone JID '${effectiveJid}'`);
+                            } else {
+                                console.log(`[JID_FIX] Warning: Received message from LID '${sender}' without phone JID mapping. Responding directly to LID.`);
                             }
                         }
 

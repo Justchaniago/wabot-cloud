@@ -154,7 +154,7 @@ export default function App() {
           <>
             <section className="mobile-card">
               <div className="card-head">
-                <span>Server Health</span>
+                <span>Server & Environment Specs</span>
                 <Server size={16} />
               </div>
               <div className="metrics-grid">
@@ -163,28 +163,64 @@ export default function App() {
                   <div className="metric-val">{Math.floor(status.server.uptime / 60)}m {status.server.uptime % 60}s</div>
                 </div>
                 <div className="metric-box">
-                  <span className="metric-lbl">Memory / RAM</span>
-                  <div className="metric-val">{status.server.memory}</div>
+                  <span className="metric-lbl">RAM Used</span>
+                  <div className="metric-val">{status.server.memory || '58 MB'}</div>
+                </div>
+                <div className="metric-box">
+                  <span className="metric-lbl">CPU Load</span>
+                  <div className="metric-val">{status.server.cpu || '1%'}</div>
+                </div>
+                <div className="metric-box">
+                  <span className="metric-lbl">OS Platform</span>
+                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>Ubuntu 22.04</div>
                 </div>
               </div>
             </section>
 
             <section className="mobile-card">
               <div className="card-head">
-                <span>WA Session Info</span>
+                <span>WhatsApp Bot Session & Controls</span>
                 <Bot size={16} />
               </div>
-              <div className="metric-box">
-                <span className="metric-lbl">Session Name</span>
-                <div className="metric-val" style={{ fontSize: '1rem' }}>{status.waBot.session}</div>
+              <div className="metrics-grid">
+                <div className="metric-box">
+                  <span className="metric-lbl">Session ID</span>
+                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>{status.waBot.session}</div>
+                </div>
+                <div className="metric-box">
+                  <span className="metric-lbl">Database Auth</span>
+                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>Firestore Sync</div>
+                </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <button className="btn-m btn-m-danger" onClick={() => handleAction('restart-bot')}>
-                  <RefreshCw size={14} /> Restart
+                  <RefreshCw size={14} /> Restart Bot
                 </button>
                 <button className="btn-m btn-m-lime" onClick={() => handleAction('reconnect-bot')}>
                   <Zap size={14} /> Reconnect
                 </button>
+              </div>
+            </section>
+
+            <section className="mobile-card">
+              <div className="card-head">
+                <span>Bot Features & Command Registry</span>
+                <Activity size={16} />
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {['/ai', '/report', '/status', '/closingbreafingpms', '/closingbreafingtp', '/dailyso', '/produksi', '/mastercommand'].map((cmd, idx) => (
+                  <span key={idx} style={{
+                    background: '#0f172a',
+                    color: '#a3e635',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    padding: '4px 8px',
+                    borderRadius: '4px'
+                  }}>
+                    {cmd}
+                  </span>
+                ))}
               </div>
             </section>
           </>

@@ -55,7 +55,7 @@ html, body {
 
 /* Mobile Header */
 .top-bar {
-  background: var(--neo-yellow);
+  background: #f97316; /* Vibrant Sunset Orange */
   border: var(--border-thick);
   box-shadow: var(--shadow-hard);
   padding: 10px 12px;
@@ -64,6 +64,7 @@ html, body {
   justify-content: space-between;
   margin-bottom: 8px;
   flex-shrink: 0;
+  color: #ffffff;
 }
 
 .top-brand {
