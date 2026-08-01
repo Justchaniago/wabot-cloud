@@ -17,6 +17,31 @@ const PREFIX = process.env.COMMAND_PREFIX || '/';
 const app = express();
 app.use(express.json());
 
+// Override console logs to auto-stream to WebSocket control panel
+const originalLog = console.log;
+const originalError = console.error;
+
+console.log = (...args) => {
+    originalLog(...args);
+    try {
+        const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+        if (typeof broadcastLog === 'function') {
+            const type = msg.includes('[EXEC_ERR]') || msg.includes('[CRITICAL]') ? 'ERROR' : 
+                         msg.includes('[WARN]') ? 'WARN' : 
+                         msg.includes('[SUCCESS]') || msg.includes('[CONNECTED]') ? 'SUCCESS' : 'INFO';
+            broadcastLog(type, msg);
+        }
+    } catch (e) {}
+};
+
+console.error = (...args) => {
+    originalError(...args);
+    try {
+        const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+        if (typeof broadcastLog === 'function') broadcastLog('ERROR', msg);
+    } catch (e) {}
+};
+
 // Prevent container crash on Baileys Noise decipher / crypto errors
 process.on('uncaughtException', (err) => {
     console.error('[CRITICAL] Uncaught Exception:', err.message);
