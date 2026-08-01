@@ -240,7 +240,7 @@ const setupPanelServer = require('./panel-server');
 const server = http.createServer(app);
 const { broadcastLog, broadcastWaBotStatus } = setupPanelServer(app, server);
 
-// Register global handler for panel restart trigger
+// Register global handler for panel restart & pairing trigger
 global.restartWaBotHandler = () => {
     console.log('[BOT] Panel triggered bot restart sequence...');
     botStatus.status = 'RESTARTING';
@@ -250,6 +250,15 @@ global.restartWaBotHandler = () => {
         try { sockInstance.end(); } catch (e) {}
     }
     setTimeout(startBot, 2000);
+};
+
+global.requestPairingCodeHandler = async (phone) => {
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    if (!sockInstance) throw new Error('Socket belum siap');
+    const code = await sockInstance.requestPairingCode(cleanPhone);
+    currentPairingCode = code;
+    broadcastWaBotStatus({ pairingCode: code });
+    return code;
 };
 
 server.listen(PORT, () => {
@@ -425,6 +434,7 @@ async function startBot() {
                     if (command) {
                         let effectiveJid = sender;
                         if (sender && sender.endsWith('@lid')) {
+                            console.log(`[LID_DEBUG] msg.key properties:`, JSON.stringify(msg.key));
                             const phoneJid = msg.key.remoteJidAlt || msg.key.participantAlt || msg.key.participant;
                             if (phoneJid && phoneJid.endsWith('@s.whatsapp.net')) {
                                 effectiveJid = phoneJid;

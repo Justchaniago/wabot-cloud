@@ -37,14 +37,29 @@ function setupPanelServer(app, server) {
     });
   }, 3000);
 
-  // Panel API routes
   app.post('/api/panel/restart-bot', (req, res) => {
     broadcastLog('WARN', 'Restart signal received from Web Control Panel');
-    // Emits event that index.js can subscribe to if needed
     if (global.restartWaBotHandler) {
       global.restartWaBotHandler();
     }
     res.json({ success: true, message: 'Restart triggered' });
+  });
+
+  app.post('/api/panel/request-pairing', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Nomor telepon wajib diisi' });
+    
+    broadcastLog('INFO', `Requesting pairing code for: ${phone}`);
+    if (global.requestPairingCodeHandler) {
+      try {
+        const code = await global.requestPairingCodeHandler(phone);
+        res.json({ success: true, code, message: 'Kode pairing berhasil dibuat' });
+      } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    } else {
+      res.status(500).json({ success: false, error: 'WhatsApp socket belum siap' });
+    }
   });
 
   app.post('/api/panel/reconnect-bot', (req, res) => {

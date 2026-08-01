@@ -17,6 +17,7 @@ export default function App() {
     ai: { ready: true }
   });
   const [logs, setLogs] = useState([]);
+  const [pairingCode, setPairingCode] = useState(null);
   
   // Chat State
   const [chatMessages, setChatMessages] = useState([
@@ -226,12 +227,56 @@ export default function App() {
           </>
         )}
 
-        {/* TAB 2: TROUBLESHOOT */}
+        {/* TAB 2: TROUBLESHOOT & PAIRING */}
         {activeTab === 'troubleshoot' && (
           <>
             <section className="mobile-card">
               <div className="card-head">
-                <span>Pairing / QR Code</span>
+                <span>Request Kode Pairing WhatsApp</span>
+                <QrCode size={16} />
+              </div>
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                const phone = e.target.phone.value;
+                if (!phone) return;
+                const data = await handleAction('request-pairing', { phone });
+                if (data && data.code) {
+                  setPairingCode(data.code);
+                }
+              }} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <input 
+                  type="text" 
+                  name="phone"
+                  className="input-m" 
+                  placeholder="Contoh: 628123456789" 
+                  required
+                />
+                <button type="submit" className="btn-m btn-m-lime">
+                  <Zap size={14} /> Dapatkan Kode Pairing
+                </button>
+              </form>
+
+              {pairingCode && (
+                <div style={{
+                  background: '#0f172a',
+                  color: '#38bdf8',
+                  border: '2px solid #0f172a',
+                  padding: '12px',
+                  textAlign: 'center',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 800,
+                  fontSize: '1.4rem',
+                  letterSpacing: '4px',
+                  marginTop: '8px'
+                }}>
+                  {pairingCode}
+                </div>
+              )}
+            </section>
+
+            <section className="mobile-card">
+              <div className="card-head">
+                <span>Scan QR Code</span>
                 <QrCode size={16} />
               </div>
               {status.waBot.rawQr ? (
@@ -244,7 +289,7 @@ export default function App() {
                   <p style={{ fontSize: '0.75rem', fontWeight: 700, marginTop: '6px' }}>Scan via WhatsApp Linked Devices</p>
                 </div>
               ) : (
-                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>Status: WA Bot terhubung & normal.</p>
+                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>Status: WA Bot terhubung & normal (Atau gunakan pairing code di atas).</p>
               )}
             </section>
 
