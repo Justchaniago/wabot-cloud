@@ -643,6 +643,165 @@ ${JSON.stringify(validProductNamesList, null, 2)}
         }
     });
 
+    // 5.5. /dailyso
+    bot.command('dailyso', async (ctx) => {
+        const fullText = ctx.message.text || '';
+        const lines = fullText.split('\n');
+        lines.shift();
+        const inputText = lines.join('\n').trim();
+
+        if (!inputText) {
+            return await ctx.reply(`⚠️ *Format /dailyso Salah!*\n\n*Contoh Kirim:*\n/dailyso\n30.7.26\ngong cha y16 cups 10\nfresh milk diamond 5`, { parse_mode: 'Markdown' });
+        }
+
+        if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+
+        const senderName = ctx.from.first_name || ctx.from.username || 'User';
+
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
+        const dateRaw = inputLines.shift();
+
+        const dateParts = dateRaw.split(/[./-]/);
+        if (dateParts.length < 3) {
+            return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `30.7.26`', { parse_mode: 'Markdown' });
+        }
+        const day = parseInt(dateParts[0], 10);
+        const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+
+        const targetColIdx = 3 + day;
+        const colLetter = colIndexToLetter(targetColIdx);
+
+        await ctx.reply(`⏳ Menghubungkan ke Spreadsheet Daily SO *${branch.name}*, Kolom *${colLetter}* (Tanggal ${day})...`, { parse_mode: 'Markdown' });
+
+        try {
+            const sheets = await getSheetsClient();
+            const spreadsheetId = branch.spreadsheets.dailyso;
+
+            const metaRes = await sheets.spreadsheets.get({ spreadsheetId });
+            const allSheets = metaRes.data.sheets || [];
+            if (allSheets.length === 0) {
+                return await ctx.reply(`❌ Gagal menemukan tab di spreadsheet Daily SO ${branch.name}.`);
+            }
+
+            let targetTab = allSheets[0].properties.title;
+            const formattedTabCandidate = `${day} - ${year}`;
+            const matchedSheet = allSheets.find(s => s.properties.title === formattedTabCandidate);
+            if (matchedSheet) {
+                targetTab = matchedSheet.properties.title;
+            }
+
+            const rangeToRead = `'${targetTab}'!B1:${colLetter}150`;
+            const readRes = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range: rangeToRead
+            });
+
+            const rows = readRes.data.values || [];
+            if (rows.length === 0) {
+                return await ctx.reply(`❌ Gagal membaca produk dari tab "${targetTab}".`);
+            }
+
+            const validProducts = [];
+            rows.forEach((row, idx) => {
+                const prodName = String(row[0] || '').trim();
+                const targetColInRowIdx = targetColIdx - 2;
+                const existingQty = String(row[targetColInRowIdx] || '').trim();
+
+                if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
+                    validProducts.push({
+                        name: prodName,
+                        rowIndex: idx + 1,
+                        existingQty: (existingQty && existingQty !== '0' && existingQty !== '') ? existingQty : null
+                    });
+                }
+            });
+
+            const validProductNamesList = validProducts.map(p => p.name);
+
+            const prompt = `
+SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN, BASA-BASI, ATAU TEKS LAIN SEPERTI "Tentu,..." ATAU "Berikut adalah...".
+
+Anda adalah AI parser tangguh untuk laporan Stock Opname (SO) harian toko minuman.
+Tugas Anda:
+1. Analisis data input yang diberikan oleh staff toko:
+"""
+${inputLines.join('\n')}
+"""
+
+2. Cocokkan nama item yang diketik staff ke daftar nama produk RESMI yang ada di spreadsheet:
+${JSON.stringify(validProductNamesList, null, 2)}
+
+Aturan Penting Pencocokan:
+- Lakukan fuzzy matching pintar (singkatan/singkatan khas toko, huruf besar/kecil diabaikan).
+- Jika item SAMA SEKALI tidak ada kecocokan yang logis, masukkan nilai null di bidang "matchedName".
+
+3. Keluarkan hasil analisis dalam format JSON bersih:
+{
+  "items": [
+    { "typed": "nama_input_staff", "matchedName": "NAMA_RESMI_DI_SPREADSHEET", "quantity": angka_jumlah }
+  ]
+}
+            `.trim();
+
+            let aiResult = null;
+            for (const modelName of CANDIDATE_MODELS) {
+                try {
+                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                    const rawText = response.text || '';
+                    aiResult = parseJsonFromAi(rawText);
+                    if (aiResult && Array.isArray(aiResult.items)) break;
+                } catch (err) {}
+            }
+
+            if (!aiResult || !Array.isArray(aiResult.items)) {
+                return await ctx.reply(`❌ Gagal memparsing input Daily SO dengan AI.`);
+            }
+
+            // Direct Write
+            let successWrites = 0;
+            const unrecognizedItems = [];
+            const successReports = [];
+
+            for (const item of aiResult.items) {
+                if (!item.matchedName) {
+                    unrecognizedItems.push(item);
+                    continue;
+                }
+                const matchedProd = validProducts.find(p => p.name.toUpperCase() === item.matchedName.toUpperCase());
+                if (!matchedProd) {
+                    unrecognizedItems.push(item);
+                    continue;
+                }
+
+                await sheets.spreadsheets.values.update({
+                    spreadsheetId,
+                    range: `'${targetTab}'!${colLetter}${matchedProd.rowIndex}`,
+                    valueInputOption: 'USER_ENTERED',
+                    requestBody: { values: [[item.quantity]] }
+                });
+
+                successWrites++;
+                successReports.push(`• *${item.matchedName}*: \`${item.quantity}\``);
+            }
+
+            let replyText = `✅ *DAILY SO BERHASIL DICATAT (${branch.code})*\n`;
+            replyText += `📅 *Tanggal:* ${dateRaw} (Kolom ${colLetter})\n`;
+            replyText += `✍️ *Oleh:* *${senderName}*\n`;
+            replyText += `----------------------------------------\n`;
+            if (successWrites > 0) replyText += successReports.join('\n') + `\n`;
+            if (unrecognizedItems.length > 0) {
+                replyText += `----------------------------------------\n⚠️ *Tidak dikenali:*\n`;
+                unrecognizedItems.forEach(i => replyText += `- _${i.typed}_ (${i.quantity})\n`);
+            }
+
+            await ctx.reply(replyText, { parse_mode: 'Markdown' });
+
+        } catch (err) {
+            console.error(`[DAILYSO_${branch.code}] Error:`, err);
+            await ctx.reply(`❌ Error: ${err.message}`);
+        }
+    });
+
     // 6. /morningbriefing & aliases
     bot.command(['morningbriefing', 'morningbreafing', 'morningbreafingtp', 'morningbreafingpms', 'morningbriefingtp', 'morningbriefingpms'], async (ctx) => {
         const fullText = ctx.message.text || '';
