@@ -316,11 +316,8 @@ _Bot Cloud-Native Multi-Branch_ 🚀
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'produksi', timestamp: Date.now() });
-            return await ctx.reply(`📌 *Siap mencatat Laporan Produksi!*\n\nSilakan kirimkan data produksi Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
-1.8.26
-bt lokal 250
-gt 100`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'produksi', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL PRODUKSI*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Produksi**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
         if (!ai) {
@@ -510,11 +507,8 @@ Aturan Penting:
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'waste', timestamp: Date.now() });
-            return await ctx.reply(`📌 *Siap mencatat Laporan Waste (Dibuang)!*\n\nSilakan kirimkan data waste Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
-1.8.26
-bt lokal 10
-gt 5`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'waste', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL WASTE*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Waste (Dibuang)**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
         if (!ai) {
@@ -660,11 +654,8 @@ ${JSON.stringify(validProductNamesList, null, 2)}
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'dailyso', timestamp: Date.now() });
-            return await ctx.reply(`📌 *Siap mencatat Daily Stock Opname (SO)!*\n\nSilakan kirimkan data Daily SO Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
-30.7.26
-gong cha y16 cups 10
-fresh milk diamond 5`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'dailyso', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL DAILY SO*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Daily Stock Opname**.\n\n💡 *Contoh Kirim:* \`30.7.26\` atau \`30/07/2026\``, { parse_mode: 'Markdown' });
         }
 
         if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
@@ -1070,16 +1061,39 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
         // Check if user has a pending command session (e.g. /produksi, /waste, /dailyso without payload)
         if (userPendingCommand.has(userId)) {
             const pending = userPendingCommand.get(userId);
-            userPendingCommand.delete(userId); // Clear session
 
-            // Synthesize command message
-            ctx.message.text = `/${pending.command}\n${text}`;
-            if (pending.command === 'produksi') {
-                return await bot.handleUpdate(ctx.update);
-            } else if (pending.command === 'waste') {
-                return await bot.handleUpdate(ctx.update);
-            } else if (pending.command === 'dailyso') {
-                return await bot.handleUpdate(ctx.update);
+            if (pending.step === 'date') {
+                // Step 1 done: Received date, now update pending to step 2 (items) and ask for items data
+                userPendingCommand.set(userId, { command: pending.command, step: 'items', date: text.trim(), timestamp: Date.now() });
+
+                let exampleText = '';
+                let title = '';
+                if (pending.command === 'produksi') {
+                    title = 'PRODUKSI';
+                    exampleText = 'bt lokal 250\ngt 100\nherbal jelly 5';
+                } else if (pending.command === 'waste') {
+                    title = 'WASTE (DIBUANG)';
+                    exampleText = 'bt lokal 10\ngt 5\nherbal jelly 2';
+                } else if (pending.command === 'dailyso') {
+                    title = 'DAILY STOCK OPNAME';
+                    exampleText = 'gong cha y16 cups 10\nfresh milk diamond 5';
+                }
+
+                return await ctx.reply(`📝 *LANGKAH 2 DARI 2: INPUT DATA ${title}*\n----------------------------------------\n📅 *Tanggal:* \`${text.trim()}\`\n\nSilakan masukkan **Daftar Nama Item & Jumlah**.\n\n💡 *Contoh Format Kirim:*\n\`\`\`\n${exampleText}\n\`\`\``, { parse_mode: 'Markdown' });
+
+            } else {
+                // Step 2 done: Received items data, combine date + items and execute command
+                userPendingCommand.delete(userId); // Clear session
+                const fullPayload = `${pending.date}\n${text.trim()}`;
+                ctx.message.text = `/${pending.command}\n${fullPayload}`;
+                
+                if (pending.command === 'produksi') {
+                    return await bot.handleUpdate(ctx.update);
+                } else if (pending.command === 'waste') {
+                    return await bot.handleUpdate(ctx.update);
+                } else if (pending.command === 'dailyso') {
+                    return await bot.handleUpdate(ctx.update);
+                }
             }
         }
 
