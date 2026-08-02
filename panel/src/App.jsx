@@ -124,11 +124,11 @@ export default function App() {
       {/* Top Header */}
       <header className="top-bar">
         <div className="top-brand">
-          <h1>Whatsapp Bot Console</h1>
+          <h1>Telegram Bot Console</h1>
           <span className="top-brand-badge">by Chaniago</span>
         </div>
-        <span className={`status-pill ${status.waBot.connected ? '' : 'offline'}`}>
-          {status.waBot.connected ? '● LIVE' : '○ OFFLINE'}
+        <span className={`status-pill ${status.waBot?.connected !== false ? '' : 'offline'}`}>
+          {status.waBot?.connected !== false ? '● BOT LIVE' : '○ OFFLINE'}
         </span>
       </header>
 
@@ -180,17 +180,17 @@ export default function App() {
 
             <section className="mobile-card">
               <div className="card-head">
-                <span>WhatsApp Bot Session & Controls</span>
+                <span>Telegram Bot Engine Status</span>
                 <Bot size={16} />
               </div>
               <div className="metrics-grid">
                 <div className="metric-box">
-                  <span className="metric-lbl">Session ID</span>
-                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>{status.waBot.session}</div>
+                  <span className="metric-lbl">Platform Engine</span>
+                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>Telegram Bot API</div>
                 </div>
                 <div className="metric-box">
-                  <span className="metric-lbl">Database Auth</span>
-                  <div className="metric-val" style={{ fontSize: '0.9rem' }}>Firestore Sync</div>
+                  <span className="metric-lbl">API Connectivity</span>
+                  <div className="metric-val" style={{ fontSize: '0.9rem', color: '#16a34a' }}>● Long-Polling</div>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -198,7 +198,7 @@ export default function App() {
                   <RefreshCw size={14} /> Restart Bot
                 </button>
                 <button className="btn-m btn-m-lime" onClick={() => handleAction('reconnect-bot')}>
-                  <Zap size={14} /> Reconnect
+                  <Zap size={14} /> Reconnect API
                 </button>
               </div>
             </section>
@@ -227,79 +227,26 @@ export default function App() {
           </>
         )}
 
-        {/* TAB 2: TROUBLESHOOT & PAIRING */}
+        {/* TAB 2: TROUBLESHOOT */}
         {activeTab === 'troubleshoot' && (
           <>
             <section className="mobile-card">
               <div className="card-head">
-                <span>Request Kode Pairing WhatsApp</span>
-                <QrCode size={16} />
+                <span>Telegram Engine Status</span>
+                <ShieldAlert size={16} />
               </div>
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                const phone = e.target.phone.value;
-                if (!phone) return;
-                const data = await handleAction('request-pairing', { phone });
-                if (data && data.code) {
-                  setPairingCode(data.code);
-                }
-              }} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <input 
-                  type="text" 
-                  name="phone"
-                  className="input-m" 
-                  placeholder="Contoh: 628123456789" 
-                  required
-                />
-                <button type="submit" className="btn-m btn-m-lime">
-                  <Zap size={14} /> Dapatkan Kode Pairing
-                </button>
-              </form>
-
-              {pairingCode && (
-                <div style={{
-                  background: '#0f172a',
-                  color: '#38bdf8',
-                  border: '2px solid #0f172a',
-                  padding: '12px',
-                  textAlign: 'center',
-                  fontFamily: 'var(--font-mono)',
-                  fontWeight: 800,
-                  fontSize: '1.4rem',
-                  letterSpacing: '4px',
-                  marginTop: '8px'
-                }}>
-                  {pairingCode}
-                </div>
-              )}
-            </section>
-
-            <section className="mobile-card">
-              <div className="card-head">
-                <span>Scan QR Code</span>
-                <QrCode size={16} />
-              </div>
-              {status.waBot.rawQr ? (
-                <div style={{ textAlign: 'center' }}>
-                  <img 
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(status.waBot.rawQr)}`} 
-                    alt="QR Code" 
-                    style={{ border: '2px solid #0f172a', padding: '6px', background: 'white', maxWidth: '100%' }}
-                  />
-                  <p style={{ fontSize: '0.75rem', fontWeight: 700, marginTop: '6px' }}>Scan via WhatsApp Linked Devices</p>
-                </div>
-              ) : (
-                <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>Status: WA Bot terhubung & normal (Atau gunakan pairing code di atas).</p>
-              )}
+              <p style={{ fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.4 }}>
+                Bot Telegram menggunakan API Auth Token resmi yang aman 24/7. Anda tidak memerlukan Scan QR / Pairing Code lagi.
+              </p>
             </section>
 
             <section className="mobile-card">
               <div className="card-head">
                 <span>Fix & Reset Actions</span>
-                <ShieldAlert size={16} />
+                <Wrench size={16} />
               </div>
               <button className="btn-m btn-m-danger" onClick={() => handleAction('clear-session')}>
-                <Trash2 size={14} /> Reset Firestore Session
+                <Trash2 size={14} /> Reset Local Memory & Cache
               </button>
             </section>
           </>
