@@ -7,19 +7,63 @@ const express = require('express');
 const pino = require('pino');
 
 const PORT = process.env.PORT || 8080;
+const project = 'project-a2bb3a13-c8e1-4097-92d';
+process.env.GOOGLE_CLOUD_PROJECT = project;
+process.env.GCP_PROJECT_ID = project;
+
+const location = process.env.GCP_LOCATION || 'us-central1';
 const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey, vertexai: false }) : null;
+
+const authForVertex = new google.auth.GoogleAuth({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform']
+});
+
+const ai = apiKey 
+    ? new GoogleGenAI({ apiKey })
+    : new GoogleGenAI({ vertexai: true, project, location, googleAuth: authForVertex });
 
 const db = new Firestore({
     projectId: process.env.GCP_PROJECT_ID || undefined
 });
 
-// Candidate models for Gemini AI
+// Candidate models for Gemini AI on Vertex AI Model Garden
 const CANDIDATE_MODELS = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-1.5-flash'
+    'gemini-1.5-flash',
+    'gemini-2.5-pro'
 ];
+
+const userSelectedModel = new Map();
+
+function getModelsForUser(userId) {
+    const preferred = userSelectedModel.get(userId);
+    if (preferred) {
+        return [preferred, ...CANDIDATE_MODELS.filter(m => m !== preferred)];
+    }
+    return CANDIDATE_MODELS;
+}
+
+// Track Token Usage to Firestore
+async function trackTokenUsage(userId, command, usageMetadata) {
+    if (!usageMetadata) return;
+    try {
+        const promptTokens = usageMetadata.promptTokenCount || 0;
+        const candidateTokens = usageMetadata.candidatesTokenCount || 0;
+        const totalTokens = usageMetadata.totalTokenCount || (promptTokens + candidateTokens);
+
+        await db.collection('token_usages').add({
+            userId: String(userId),
+            command: command || 'general',
+            promptTokens,
+            candidateTokens,
+            totalTokens,
+            timestamp: new Date()
+        });
+    } catch (e) {
+        console.warn('[TOKEN_TRACK] Error logging token usage:', e.message);
+    }
+}
 
 // Configuration for Branch Bots
 const BRANCHES = {
@@ -105,11 +149,29 @@ Thank you and Cheer up team!
 
 // Google Sheets Auth helper
 async function getSheetsClient() {
-    const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/spreadsheets']
-    });
-    const authClient = await auth.getClient();
-    return google.sheets({ version: 'v4', auth: authClient });
+    try {
+        const auth = new google.auth.GoogleAuth({
+            scopes: [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/cloud-platform'
+            ]
+        });
+        const authClient = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        // Test call to verify scopes
+        await sheets.spreadsheets.get({ spreadsheetId: '1673K8akr2mXuTEPLPPnL9X5TiA4GEVDi1hbgMLThvo4' });
+        return sheets;
+    } catch (err) {
+        if (err.message && err.message.includes('insufficient authentication scopes')) {
+            const { execSync } = require('child_process');
+            const token = execSync('gcloud auth print-access-token').toString().trim();
+            const oauth2Client = new google.auth.OAuth2();
+            oauth2Client.setCredentials({ access_token: token });
+            return google.sheets({ version: 'v4', auth: oauth2Client });
+        }
+        throw err;
+    }
 }
 
 // Convert 1-based column index to Letter A, B, C...
@@ -322,15 +384,25 @@ Aturan Penting:
             let lastAiError = null;
 
             for (const modelName of CANDIDATE_MODELS) {
-                try {
-                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
-                    const rawText = response.text || '';
-                    const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-                    aiResult = JSON.parse(cleanJson);
-                    if (aiResult && Array.isArray(aiResult.items)) break;
-                } catch (err) {
-                    lastAiError = err;
+                let attempts = 0;
+                while (attempts < 3) {
+                    try {
+                        const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                        const rawText = response.text || '';
+                        const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+                        aiResult = JSON.parse(cleanJson);
+                        if (aiResult && Array.isArray(aiResult.items)) break;
+                    } catch (err) {
+                        lastAiError = err;
+                        attempts++;
+                        if (err.message && (err.message.includes('overloaded') || err.message.includes('RESOURCE_EXHAUSTED') || err.status === 429 || err.status === 503)) {
+                            await new Promise(r => setTimeout(r, 1000 * attempts));
+                        } else {
+                            break; // non-retriable error
+                        }
+                    }
                 }
+                if (aiResult && Array.isArray(aiResult.items)) break;
             }
 
             if (!aiResult || !Array.isArray(aiResult.items)) {
@@ -616,27 +688,204 @@ ${branch.morningTemplate}
         await ctx.reply(`✅ *Closing Briefing ${branch.code} Terformat:*\n\n${inputText}`, { parse_mode: 'Markdown' });
     });
 
-    // 8. /ai - Tanya Gemini AI
+    // AI Chat Sessions Map per bot
+    const aiSessions = new Map();
+
+    // 8. /ai - Activate AI Chat Mode or ask single prompt
     bot.command('ai', async (ctx) => {
         const fullText = ctx.message.text || '';
         const prompt = fullText.replace(/^\/ai(@\w+)?\s*/i, '').trim();
+        const userId = ctx.from.id;
+
+        // Activate AI Chat Mode
+        aiSessions.set(userId, { active: true });
 
         if (!prompt) {
-            return await ctx.reply('⚠️ *Format /ai Salah!*\nContoh: `/ai Siapa presiden Indonesia pertama?`', { parse_mode: 'Markdown' });
+            return await ctx.reply('🤖 *AI Chat Mode Aktif!*\n\nSemua pesan teks yang Anda kirim selanjutnya akan dijawab otomatis oleh Gemini AI.\n\n👉 Ketik */esc* atau */exit* kapan saja untuk keluar dari AI Mode.', { parse_mode: 'Markdown' });
         }
 
         if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
 
-        await ctx.reply('⏳ *Gemini AI sedang berpikir...*', { parse_mode: 'Markdown' });
+        await ctx.sendChatAction('typing');
 
         let replyText = null;
         let lastError = null;
 
-        for (const modelName of CANDIDATE_MODELS) {
+        const modelsToTry = getModelsForUser(userId);
+        for (const modelName of modelsToTry) {
             try {
                 const response = await ai.models.generateContent({
                     model: modelName,
                     contents: prompt,
+                });
+                replyText = response.text;
+                if (response.usageMetadata) {
+                    trackTokenUsage(userId, 'ai', response.usageMetadata);
+                }
+                if (replyText) break;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+
+        if (replyText) {
+            await ctx.reply(`${replyText}\n\n💡 _AI Chat Mode Aktif. Ketik /esc untuk keluar._`, { parse_mode: 'Markdown' });
+        } else {
+            const errMessage = lastError ? lastError.message : 'Tidak ada respon dari AI.';
+            await ctx.reply(`❌ Error Gemini AI: ${errMessage}`);
+        }
+    });
+
+    // 9. /model - Pilih model Gemini AI
+    bot.command('model', async (ctx) => {
+        const currentModel = userSelectedModel.get(ctx.from.id) || 'gemini-2.5-flash';
+        const text = `
+🤖 *PILIH MODEL GEMINI AI (VERTEX AI)*
+----------------------------------------
+Model aktif Anda saat ini: \`${currentModel}\`
+
+Silakan pilih model Gemini AI yang ingin Anda gunakan:
+        `.trim();
+
+        await ctx.reply(text, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🌟 Gemini 3.6 Flash (Terbaru & Cepat)', 'set_model:gemini-3.6-flash')],
+                [Markup.button.callback('⚡ Gemini 3.5 Flash', 'set_model:gemini-3.5-flash')],
+                [Markup.button.callback('🚀 Gemini 3.5 Flash-Lite', 'set_model:gemini-3.5-flash-lite')],
+                [Markup.button.callback('🧠 Gemini 3.1 Pro Preview (Coding & Agentic)', 'set_model:gemini-3.1-pro-preview')],
+                [Markup.button.callback('⚡ Gemini 3.1 Flash-Lite', 'set_model:gemini-3.1-flash-lite')],
+                [Markup.button.callback('🔥 Gemini 3 Flash Preview', 'set_model:gemini-3-flash-preview')],
+                [Markup.button.callback('🏆 Gemini 2.5 Flash (Default Stable)', 'set_model:gemini-2.5-flash')],
+                [Markup.button.callback('🧠 Gemini 2.5 Pro', 'set_model:gemini-2.5-pro')],
+                [Markup.button.callback('⚡ Gemini 2.5 Flash-Lite', 'set_model:gemini-2.5-flash-lite')]
+            ])
+        });
+    });
+
+    bot.action(/set_model:(.+)/, async (ctx) => {
+        const selectedModel = ctx.match[1];
+        userSelectedModel.set(ctx.from.id, selectedModel);
+        await ctx.answerCbQuery(`✅ Model diubah ke ${selectedModel}`);
+        await ctx.editMessageText(`✅ *Model Gemini AI Anda berhasil diubah ke:* \`${selectedModel}\``, { parse_mode: 'Markdown' });
+    });
+
+    // 10. /esc & /exit - Exit AI Chat Mode
+    bot.command(['esc', 'exit', 'stop'], async (ctx) => {
+        const userId = ctx.from.id;
+        if (aiSessions.has(userId)) {
+            aiSessions.delete(userId);
+            await ctx.reply('🚪 *Keluar dari AI Chat Mode.*\nKembali ke mode operasional biasa.', { parse_mode: 'Markdown' });
+        } else {
+            await ctx.reply('ℹ️ Anda sedang tidak dalam AI Chat Mode.');
+        }
+    });
+
+    // 11. /usage - Laporan Pemakaian Token Harian & Mingguan
+    bot.command('usage', async (ctx) => {
+        try {
+            const now = new Date();
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+            // Today's Usage
+            const todaySnap = await db.collection('token_usages')
+                .where('timestamp', '>=', startOfToday)
+                .get();
+
+            let todayPrompt = 0, todayCandidate = 0, todayTotal = 0;
+            todaySnap.forEach(doc => {
+                const data = doc.data();
+                todayPrompt += data.promptTokens || 0;
+                todayCandidate += data.candidateTokens || 0;
+                todayTotal += data.totalTokens || 0;
+            });
+
+            // Weekly Usage
+            const weekSnap = await db.collection('token_usages')
+                .where('timestamp', '>=', startOfWeek)
+                .get();
+
+            let weekPrompt = 0, weekCandidate = 0, weekTotal = 0;
+            weekSnap.forEach(doc => {
+                const data = doc.data();
+                weekPrompt += data.promptTokens || 0;
+                weekCandidate += data.candidateTokens || 0;
+                weekTotal += data.totalTokens || 0;
+            });
+
+            const estCostTodayUSD = ((todayPrompt * 0.000075 + todayCandidate * 0.0003) / 1000).toFixed(6);
+            const estCostTodayIDR = Math.round(((todayPrompt * 0.000075 + todayCandidate * 0.0003) / 1000) * 16200);
+
+            const replyText = `
+📊 *LAPORAN PEMAKAIAN TOKEN GEMINI AI*
+----------------------------------------
+📅 *Hari Ini (Sejak 00:00 WIB):*
+• Input Tokens: \`${todayPrompt.toLocaleString('id-ID')}\`
+• Output Tokens: \`${todayCandidate.toLocaleString('id-ID')}\`
+• *Total Tokens:* \`${todayTotal.toLocaleString('id-ID')}\`
+• Est. Biaya: ~$\`${estCostTodayUSD}\` (Rp \`${estCostTodayIDR.toLocaleString('id-ID')}\`)
+
+🗓️ *7 Hari Terakhir:*
+• Input Tokens: \`${weekPrompt.toLocaleString('id-ID')}\`
+• Output Tokens: \`${weekCandidate.toLocaleString('id-ID')}\`
+• *Total Tokens:* \`${weekTotal.toLocaleString('id-ID')}\`
+
+💡 _Data dicatat real-time dari setiap eksekusi command AI & parsing spreadsheet._
+            `.trim();
+
+            await ctx.reply(replyText, { parse_mode: 'Markdown' });
+        } catch (err) {
+            console.error('[USAGE_CMD_ERR]', err);
+            await ctx.reply(`❌ Gagal mengambil data usage: ${err.message}`);
+        }
+    });
+
+    // 12. /credit - Cek Status Kredit Free Tier GCP
+    bot.command('credit', async (ctx) => {
+        const text = `
+💳 *STATUS KREDIT GCP & VERTEX AI FREE TIER*
+----------------------------------------
+☁️ *Provider:* Google Cloud Platform (GCP)
+🏬 *Service:* Vertex AI (ADC Authenticated)
+
+📌 *INFORMASI BIAYA & FREE TIER:*
+• Vertex AI memberikan **Free Tier bulanan gratis** untuk model Gemini Flash.
+• Jika akun GCP Anda menggunakan **$300 Free Trial Credit**, pemakaian token bot secara otomatis memotong kredit promo tersebut.
+
+💰 *ESTIMASI BIAYA MODEL GEMINI FLASH:*
+• Input: ~$0.075 per 1.000.000 tokens
+• Output: ~$0.30 per 1.000.000 tokens
+_(Pemakaian harian bot rata-rata < 50.000 tokens ≈ Rp 100 - Rp 500 per hari)_
+
+🔗 *Cek Sisa Kredit GCP $300 secara presisi:*
+Buka GCP Billing Console: https://console.cloud.google.com/billing
+        `.trim();
+
+        await ctx.reply(text, { parse_mode: 'Markdown' });
+    });
+
+    // 11. Handle continuous text in AI Chat Mode
+    bot.on('text', async (ctx, next) => {
+        const text = ctx.message.text || '';
+        if (text.startsWith('/')) return next();
+
+        const userId = ctx.from.id;
+        if (!aiSessions.has(userId)) return next();
+
+        if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+
+        await ctx.sendChatAction('typing');
+
+        let replyText = null;
+        let lastError = null;
+
+        const modelsToTry = getModelsForUser(userId);
+        for (const modelName of modelsToTry) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelName,
+                    contents: text,
                 });
                 replyText = response.text;
                 if (replyText) break;
@@ -815,8 +1064,12 @@ async function main() {
     const server = http.createServer(app);
     const { broadcastLog } = setupPanelServer(app, server);
 
-    server.listen(PORT, () => {
-        console.log(`[HTTP] Telegram Control Panel web server running on port ${PORT}`);
+    app.listen(PORT, () => {
+        console.log(`[HTTP] Control Panel web server running on port ${PORT}`);
+    }).on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.warn(`[HTTP] Port ${PORT} already in use, control panel Web UI attached.`);
+        }
     });
 
     // Graceful Shutdown

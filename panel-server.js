@@ -101,7 +101,9 @@ function setupPanelServer(app, server) {
       if (apiKey) {
         ai = new GoogleGenAI({ apiKey });
       } else {
-        const project = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'project-a2bb3a13-c8e1-4097-92d';
+        const project = 'project-a2bb3a13-c8e1-4097-92d';
+        process.env.GOOGLE_CLOUD_PROJECT = project;
+        process.env.GCP_PROJECT_ID = project;
         ai = new GoogleGenAI({ vertexai: true, project, location: 'us-central1' });
       }
 

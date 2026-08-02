@@ -22,7 +22,9 @@ module.exports = {
             );
         }
 
-        const project = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'project-a2bb3a13-c8e1-4097-92d';
+        const project = 'project-a2bb3a13-c8e1-4097-92d';
+        process.env.GOOGLE_CLOUD_PROJECT = project;
+        process.env.GCP_PROJECT_ID = project;
         const location = process.env.GCP_LOCATION || 'us-central1';
 
         const ai = new GoogleGenAI({
