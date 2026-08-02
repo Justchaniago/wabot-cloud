@@ -322,6 +322,38 @@ function setupBot(branch) {
     const bot = new Telegraf(branch.token);
     const userPendingCommand = new Map();
 
+    // --- INTERSEPTOR GLOBAL ANTI-EMOTICON & ANTI-EMOJI ---
+    bot.use(async (ctx, next) => {
+        const hapusEmoticonDanIkon = (text) => {
+            if (!text) return '';
+            // 1. Bersihkan seluruh rentang karakter Unicode Emoji, Simbol, Dingbats, dan Emoticon
+            let bersih = text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}\u{1F191}-\u{1F251}\u{1F004}\u{1F0CF}\u{1F170}-\u{1F171}\u{1F17E}-\u{1F17F}\u{1F18E}\u{3030}\u{2B50}\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2190}-\u{21FF}]/gu, '');
+            // 2. Ubah bullet tebal (•) menjadi strip (-)
+            bersih = bersih.replace(/•/g, '-');
+            return bersih;
+        };
+
+        // Intersepsi fungsi reply biasa
+        const originalReply = ctx.reply;
+        ctx.reply = async function (text, extra) {
+            return originalReply.call(ctx, hapusEmoticonDanIkon(text), extra);
+        };
+
+        // Intersepsi fungsi reply dengan MarkdownV2
+        const originalReplyWithMarkdownV2 = ctx.replyWithMarkdownV2;
+        ctx.replyWithMarkdownV2 = async function (text, extra) {
+            return originalReplyWithMarkdownV2.call(ctx, hapusEmoticonDanIkon(text), extra);
+        };
+
+        // Intersepsi fungsi editMessageText
+        const originalEditMessageText = ctx.editMessageText;
+        ctx.editMessageText = async function (text, extra) {
+            return originalEditMessageText.call(ctx, hapusEmoticonDanIkon(text), extra);
+        };
+
+        return next();
+    });
+
     // 1. /start & /help
     bot.command(['start', 'help'], async (ctx) => {
         const welcomeText = `
