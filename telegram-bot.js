@@ -1480,22 +1480,27 @@ async function writeProduksiItems(sheets, spreadsheetId, tabName, items, product
         successReports.push(`• *${item.matchedName}*: \`${item.quantity}\``);
     }
 
-    let replyText = `✅ *PRODUKSI BERHASIL DICATAT (${branchCode})*\n`;
-    replyText += `📅 *Tab:* ${tabName}\n`;
-    replyText += `✍️ *Oleh:* *${senderName}*\n`;
+    let replyText = `*PRODUKSI BERHASIL DICATAT (${branchCode})*\n`;
+    replyText += `*Tab:* ${tabName}\n`;
+    replyText += `*Oleh:* *${senderName}*\n`;
     replyText += `----------------------------------------\n`;
     if (successWrites > 0) replyText += successReports.join('\n') + `\n`;
     if (unrecognizedItems.length > 0) {
-        replyText += `----------------------------------------\n⚠️ *Item tidak dikenali:*\n`;
+        replyText += `----------------------------------------\n*Item tidak dikenali:*\n`;
         unrecognizedItems.forEach(i => replyText += `- _${i.typed}_ (${i.quantity})\n`);
     }
 
     await ctx.reply(replyText, { parse_mode: 'Markdown' });
 }
 
-// Escape markdown special characters
+// Escape markdown special characters dan bersihkan seluruh emoticon/emoji
 function escapeMarkdown(text) {
-    return text.replace(/[_*[\]()~`>#+-=|{}.!]/g, '\\$&');
+    if (!text) return '';
+    // Regex tangguh untuk mendeteksi dan menghapus semua Emoji, Simbol Emoticon, Pictographs, dan Transport/Map symbols
+    let cleanText = text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}\u{1F191}-\u{1F251}\u{1F004}\u{1F0CF}\u{1F170}-\u{1F171}\u{1F17E}-\u{1F17F}\u{1F18E}\u{3030}\u{2B50}\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2190}-\u{21FF}]/gu, '');
+    // Hapus juga sisa-sisa karakter bullet titik besar/kecil yang sering disalahartikan sebagai ikon jika diminta bersih total
+    cleanText = cleanText.replace(/•/g, '-');
+    return cleanText.replace(/[_*[\]()~`>#+-=|{}.!]/g, '\\$&');
 }
 
 // Express Control Panel Server
