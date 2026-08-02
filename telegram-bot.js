@@ -163,12 +163,19 @@ async function getSheetsClient() {
         await sheets.spreadsheets.get({ spreadsheetId: '1673K8akr2mXuTEPLPPnL9X5TiA4GEVDi1hbgMLThvo4' });
         return sheets;
     } catch (err) {
-        if (err.message && err.message.includes('insufficient authentication scopes')) {
-            const { execSync } = require('child_process');
-            const token = execSync('gcloud auth print-access-token').toString().trim();
-            const oauth2Client = new google.auth.OAuth2();
-            oauth2Client.setCredentials({ access_token: token });
-            return google.sheets({ version: 'v4', auth: oauth2Client });
+        const errMsg = String(err.message || '');
+        if (errMsg.includes('insufficient authentication scopes') || err.code === 403 || err.status === 403) {
+            try {
+                const { execSync } = require('child_process');
+                const token = execSync('gcloud auth print-access-token').toString().trim();
+                if (token) {
+                    const oauth2Client = new google.auth.OAuth2();
+                    oauth2Client.setCredentials({ access_token: token });
+                    return google.sheets({ version: 'v4', auth: oauth2Client });
+                }
+            } catch (fallbackErr) {
+                console.error('[SHEETS_AUTH] Fallback gcloud token error:', fallbackErr.message);
+            }
         }
         throw err;
     }
