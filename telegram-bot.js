@@ -150,35 +150,26 @@ Thank you and Cheer up team!
 // Google Sheets Auth helper
 async function getSheetsClient() {
     try {
-        const auth = new google.auth.GoogleAuth({
-            scopes: [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive',
-                'https://www.googleapis.com/auth/cloud-platform'
-            ]
-        });
-        const authClient = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: authClient });
-        // Test call to verify scopes
-        await sheets.spreadsheets.get({ spreadsheetId: '1673K8akr2mXuTEPLPPnL9X5TiA4GEVDi1hbgMLThvo4' });
-        return sheets;
-    } catch (err) {
-        const errMsg = String(err.message || '');
-        if (errMsg.includes('insufficient authentication scopes') || err.code === 403 || err.status === 403) {
-            try {
-                const { execSync } = require('child_process');
-                const token = execSync('gcloud auth print-access-token').toString().trim();
-                if (token) {
-                    const oauth2Client = new google.auth.OAuth2();
-                    oauth2Client.setCredentials({ access_token: token });
-                    return google.sheets({ version: 'v4', auth: oauth2Client });
-                }
-            } catch (fallbackErr) {
-                console.error('[SHEETS_AUTH] Fallback gcloud token error:', fallbackErr.message);
-            }
+        const { execSync } = require('child_process');
+        const token = execSync('gcloud auth application-default print-access-token 2>/dev/null || gcloud auth print-access-token 2>/dev/null').toString().trim();
+        if (token) {
+            const oauth2Client = new google.auth.OAuth2();
+            oauth2Client.setCredentials({ access_token: token });
+            return google.sheets({ version: 'v4', auth: oauth2Client });
         }
-        throw err;
+    } catch (e) {
+        console.error('[SHEETS_AUTH] Direct gcloud token fetch failed:', e.message);
     }
+
+    const auth = new google.auth.GoogleAuth({
+        scopes: [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive',
+            'https://www.googleapis.com/auth/cloud-platform'
+        ]
+    });
+    const authClient = await auth.getClient();
+    return google.sheets({ version: 'v4', auth: authClient });
 }
 
 // Helper to safely extract and parse JSON from AI response
@@ -196,6 +187,72 @@ function parseJsonFromAi(text) {
         }
     }
     return null;
+}
+
+function getJakartaCalendarDate() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(new Date());
+    const value = type => parts.find(part => part.type === type).value;
+
+    return {
+        day: Number(value('day')),
+        month: Number(value('month')),
+        year: Number(value('year'))
+    };
+}
+
+function getDaysToCheck(todayDay) {
+    return Array.from({ length: Math.max(todayDay - 1, 0) }, (_, index) => index + 1);
+}
+
+function hasReportedQuantity(rows, startIndex, endIndex, quantityColumnIndex) {
+    for (let index = startIndex; index < endIndex; index++) {
+        const productName = String(rows[index]?.[0] || '').trim();
+        const quantity = String(rows[index]?.[quantityColumnIndex] || '').trim();
+
+        if (productName && !productName.startsWith('---') && !productName.includes('KODE') &&
+            !productName.includes('NAMA PRODUK') && quantity && quantity !== '0') {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getProductionWasteStatus(rows) {
+    let productionStartIndex = -1;
+    let wasteStartIndex = -1;
+
+    rows.forEach((row, index) => {
+        const value = String(row[0] || '').trim().toUpperCase();
+        if (value === 'PRODUCTION') productionStartIndex = index;
+        if (value === 'WASTE') wasteStartIndex = index;
+    });
+
+    const productionEndIndex = wasteStartIndex === -1 ? rows.length : wasteStartIndex;
+    return {
+        productionFilled: productionStartIndex !== -1 &&
+            hasReportedQuantity(rows, productionStartIndex + 1, productionEndIndex, 2),
+        wasteFilled: wasteStartIndex !== -1 &&
+            hasReportedQuantity(rows, wasteStartIndex + 1, rows.length, 2)
+    };
+}
+
+function getDailySoStatus(rows, day) {
+    // Daily SO writes day 1 to column D, day 2 to E, and so on.
+    const quantityColumnIndex = (3 + day) - 2;
+    return hasReportedQuantity(rows, 0, rows.length, quantityColumnIndex);
+}
+
+function formatDayList(days) {
+    return days.length ? days.map(day => `\`${day}\``).join(', ') : '—';
+}
+
+function formatCheckPeriod(days, calendarDate) {
+    return `${days[0]}–${days[days.length - 1]}/${String(calendarDate.month).padStart(2, '0')}/${calendarDate.year}`;
 }
 
 // Convert 1-based column index to Letter A, B, C...
@@ -244,6 +301,8 @@ Selamat datang! Gunakan bot ini untuk menginput data operasional ke Google Sheet
 • \`/produksi [data]\` - Input Laporan Produksi Harian
 • \`/waste [data]\` - Input Laporan Waste (Dibuang)
 • \`/dailyso [data]\` - Input Daily Stock Opname
+• \`/checkprodwaste\` - Cek tanggal Produksi/Waste yang belum diisi bulan ini
+• \`/checkdailyso\` - Cek tanggal Daily SO yang belum diisi bulan ini
 • \`/morningbriefing [data]\` - Format Morning Briefing Shift
 • \`/closingbriefing [data]\` - Format Closing Briefing Shift
 • \`/testsheet\` - Uji koneksi Google Sheets
@@ -308,7 +367,125 @@ _Bot Cloud-Native Multi-Branch_ 🚀
         }
     });
 
-    // 4. /produksi
+    // 4. /checkprodwaste - Check production and waste entries from the first day of this month through yesterday.
+    bot.command('checkprodwaste', async (ctx) => {
+        const calendarDate = getJakartaCalendarDate();
+        const days = getDaysToCheck(calendarDate.day);
+
+        if (days.length === 0) {
+            return await ctx.reply('ℹ️ Belum ada tanggal sebelum hari ini untuk diperiksa pada bulan ini.', { parse_mode: 'Markdown' });
+        }
+
+        await ctx.reply(`⏳ Mengecek Produksi dan Waste ${branch.name} sampai kemarin...`, { parse_mode: 'Markdown' });
+
+        try {
+            const sheets = await getSheetsClient();
+            const spreadsheetId = branch.spreadsheets.produksi;
+            const metaRes = await sheets.spreadsheets.get({
+                spreadsheetId,
+                fields: 'sheets.properties.title'
+            });
+            const availableTabs = new Set((metaRes.data.sheets || []).map(sheet => sheet.properties.title));
+            const existingDays = days.filter(day => availableTabs.has(`${day} - ${calendarDate.year}`));
+            const missingTabs = days.filter(day => !availableTabs.has(`${day} - ${calendarDate.year}`));
+            const missingProduction = [...missingTabs];
+            const missingWaste = [...missingTabs];
+
+            if (existingDays.length > 0) {
+                const ranges = existingDays.map(day => `'${day} - ${calendarDate.year}'!B1:D120`);
+                const result = await sheets.spreadsheets.values.batchGet({ spreadsheetId, ranges });
+
+                (result.data.valueRanges || []).forEach((valueRange, index) => {
+                    const day = existingDays[index];
+                    const status = getProductionWasteStatus(valueRange.values || []);
+                    if (!status.productionFilled) missingProduction.push(day);
+                    if (!status.wasteFilled) missingWaste.push(day);
+                });
+            }
+
+            const period = formatCheckPeriod(days, calendarDate);
+            let replyText = `📋 *CEK PRODUKSI & WASTE (${branch.code})*\n`;
+            replyText += `📅 Periode: *${period}* (sampai kemarin)\n`;
+            replyText += `----------------------------------------\n`;
+
+            if (missingProduction.length === 0 && missingWaste.length === 0) {
+                replyText += '✅ Semua tanggal pada periode ini sudah terisi untuk Produksi dan Waste.';
+            } else {
+                replyText += '❌ *Tanggal belum diisi:*\n';
+                replyText += `• Produksi: ${formatDayList(missingProduction)}\n`;
+                replyText += `• Waste: ${formatDayList(missingWaste)}`;
+                if (missingTabs.length > 0) {
+                    replyText += `\n\nℹ️ Tab belum tersedia (dianggap belum diisi): ${formatDayList(missingTabs)}`;
+                }
+            }
+
+            await ctx.reply(replyText, { parse_mode: 'Markdown' });
+        } catch (err) {
+            console.error(`[CHECK_PROD_WASTE_${branch.code}] Error:`, err);
+            await ctx.reply(`❌ Gagal mengecek Produksi/Waste: ${err.message}`);
+        }
+    });
+
+    // 5. /checkdailyso - Check Daily SO entries from the first day of this month through yesterday.
+    bot.command('checkdailyso', async (ctx) => {
+        const calendarDate = getJakartaCalendarDate();
+        const days = getDaysToCheck(calendarDate.day);
+
+        if (days.length === 0) {
+            return await ctx.reply('ℹ️ Belum ada tanggal sebelum hari ini untuk diperiksa pada bulan ini.', { parse_mode: 'Markdown' });
+        }
+
+        await ctx.reply(`⏳ Mengecek Daily SO ${branch.name} sampai kemarin...`, { parse_mode: 'Markdown' });
+
+        try {
+            const sheets = await getSheetsClient();
+            const spreadsheetId = branch.spreadsheets.dailyso;
+            const metaRes = await sheets.spreadsheets.get({
+                spreadsheetId,
+                fields: 'sheets.properties.title'
+            });
+            const sheetTitles = (metaRes.data.sheets || []).map(sheet => sheet.properties.title);
+            const defaultTab = sheetTitles[0];
+
+            if (!defaultTab) {
+                return await ctx.reply(`❌ Tidak menemukan tab pada spreadsheet Daily SO ${branch.name}.`);
+            }
+
+            const targets = days.map(day => {
+                const datedTab = `${day} - ${calendarDate.year}`;
+                const tabName = sheetTitles.includes(datedTab) ? datedTab : defaultTab;
+                const columnLetter = colIndexToLetter(3 + day);
+                return { day, tabName, columnLetter };
+            });
+            const result = await sheets.spreadsheets.values.batchGet({
+                spreadsheetId,
+                ranges: targets.map(target => `'${target.tabName}'!B1:${target.columnLetter}150`)
+            });
+            const missingDays = [];
+
+            (result.data.valueRanges || []).forEach((valueRange, index) => {
+                const target = targets[index];
+                if (!getDailySoStatus(valueRange.values || [], target.day)) {
+                    missingDays.push(target.day);
+                }
+            });
+
+            const period = formatCheckPeriod(days, calendarDate);
+            let replyText = `📋 *CEK DAILY SO (${branch.code})*\n`;
+            replyText += `📅 Periode: *${period}* (sampai kemarin)\n`;
+            replyText += `----------------------------------------\n`;
+            replyText += missingDays.length === 0
+                ? '✅ Semua tanggal pada periode ini sudah terisi untuk Daily SO.'
+                : `❌ *Tanggal belum diisi:* ${formatDayList(missingDays)}`;
+
+            await ctx.reply(replyText, { parse_mode: 'Markdown' });
+        } catch (err) {
+            console.error(`[CHECK_DAILYSO_${branch.code}] Error:`, err);
+            await ctx.reply(`❌ Gagal mengecek Daily SO: ${err.message}`);
+        }
+    });
+
+    // 6. /produksi
     bot.command('produksi', async (ctx) => {
         const fullText = ctx.message.text || '';
         const lines = fullText.split('\n');
