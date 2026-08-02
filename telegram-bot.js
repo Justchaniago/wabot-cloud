@@ -172,6 +172,38 @@ async function getSheetsClient() {
     return google.sheets({ version: 'v4', auth: authClient });
 }
 
+// Fungsi Fuzzy Match Lokal (Levenshtein Distance) untuk Cost-Optimized Token Usage harian
+function fuzzyMatchLokal(typedInput, daftarResmi) {
+    const cleanString = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    const inputClean = cleanString(typedInput);
+    if (!inputClean) return null;
+
+    let bestMatch = null;
+    let highestScore = 0;
+
+    for (const resmi of daftarResmi) {
+        const resmiClean = cleanString(resmi);
+        if (resmiClean === inputClean) {
+            return resmi; // Cocok 100% langsung bypass
+        }
+
+        // Hitung kesamaan substring sederhana
+        if (resmiClean.includes(inputClean) || inputClean.includes(resmiClean)) {
+            const score = Math.min(resmiClean.length, inputClean.length) / Math.max(resmiClean.length, inputClean.length);
+            if (score > highestScore) {
+                highestScore = score;
+                bestMatch = resmi;
+            }
+        }
+    }
+
+    // Jika kemiripan sangat tinggi (di atas 85%), anggap sukses bypass AI
+    if (highestScore >= 0.85) {
+        return bestMatch;
+    }
+    return null;
+}
+
 // Helper to safely extract and parse JSON from AI response
 function parseJsonFromAi(text) {
     if (!text) return null;
@@ -533,7 +565,41 @@ _Bot Cloud-Native Multi-Branch_ 🚀
 
             const validProductNamesList = productionProducts.map(p => p.name);
 
-            const prompt = `
+            // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
+            let preParsedSuccess = true;
+            const preParsedItems = [];
+
+            for (const line of inputLines) {
+                const parts = line.trim().split(/\s+/);
+                const quantityStr = parts.pop();
+                const quantity = parseInt(quantityStr, 10);
+                const typedName = parts.join(' ').trim();
+
+                if (!isNaN(quantity) && typedName) {
+                    const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
+                    if (matchedName) {
+                        preParsedItems.push({
+                            typed: typedName,
+                            matchedName: matchedName,
+                            quantity: quantity
+                        });
+                    } else {
+                        preParsedSuccess = false;
+                        break;
+                    }
+                } else {
+                    preParsedSuccess = false;
+                    break;
+                }
+            }
+
+            let aiResult = null;
+            if (preParsedSuccess && preParsedItems.length > 0) {
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk Produksi ${branch.code}. Hemat Token!`);
+                aiResult = { items: preParsedItems };
+            } else {
+                console.log(`[PRE-PARSER] Ada item tidak dikenal atau format bebas. Memanggil Gemini AI...`);
+                const prompt = `
 SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN, BASA-BASI, ATAU TEKS LAIN SEPERTI "Tentu,..." ATAU "Berikut adalah...".
 
 Anda adalah AI parser laporan produksi toko minuman.
@@ -553,14 +619,14 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 }
             `.trim();
 
-            let aiResult = null;
-            for (const modelName of CANDIDATE_MODELS) {
-                try {
-                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
-                    const rawText = response.text || '';
-                    aiResult = parseJsonFromAi(rawText);
-                    if (aiResult && Array.isArray(aiResult.items)) break;
-                } catch (err) {}
+                for (const modelName of CANDIDATE_MODELS) {
+                    try {
+                        const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                        const rawText = response.text || '';
+                        aiResult = parseJsonFromAi(rawText);
+                        if (aiResult && Array.isArray(aiResult.items)) break;
+                    } catch (err) {}
+                }
             }
 
             if (!aiResult || !Array.isArray(aiResult.items)) {
@@ -701,7 +767,41 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 
             const validProductNamesList = wasteProducts.map(p => p.name);
 
-            const prompt = `
+            // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
+            let preParsedSuccess = true;
+            const preParsedItems = [];
+
+            for (const line of inputLines) {
+                const parts = line.trim().split(/\s+/);
+                const quantityStr = parts.pop();
+                const quantity = parseInt(quantityStr, 10);
+                const typedName = parts.join(' ').trim();
+
+                if (!isNaN(quantity) && typedName) {
+                    const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
+                    if (matchedName) {
+                        preParsedItems.push({
+                            typed: typedName,
+                            matchedName: matchedName,
+                            quantity: quantity
+                        });
+                    } else {
+                        preParsedSuccess = false;
+                        break;
+                    }
+                } else {
+                    preParsedSuccess = false;
+                    break;
+                }
+            }
+
+            let aiResult = null;
+            if (preParsedSuccess && preParsedItems.length > 0) {
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk Waste ${branch.code}. Hemat Token!`);
+                aiResult = { items: preParsedItems };
+            } else {
+                console.log(`[PRE-PARSER] Ada item tidak dikenal atau format bebas di Waste. Memanggil Gemini AI...`);
+                const prompt = `
 Anda adalah AI parser laporan waste (item dibuang/rusak) toko minuman.
 Tugas Anda:
 1. Analisis input:
@@ -717,16 +817,16 @@ ${JSON.stringify(validProductNamesList, null, 2)}
     { "typed": "nama_input", "matchedName": "NAMA_RESMI", "quantity": angka }
   ]
 }
-            `.trim();
+                `.trim();
 
-            let aiResult = null;
-            for (const modelName of CANDIDATE_MODELS) {
-                try {
-                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
-                    const rawText = response.text || '';
-                    aiResult = parseJsonFromAi(rawText);
-                    if (aiResult && Array.isArray(aiResult.items)) break;
-                } catch (err) {}
+                for (const modelName of CANDIDATE_MODELS) {
+                    try {
+                        const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                        const rawText = response.text || '';
+                        aiResult = parseJsonFromAi(rawText);
+                        if (aiResult && Array.isArray(aiResult.items)) break;
+                    } catch (err) {}
+                }
             }
 
             if (!aiResult || !Array.isArray(aiResult.items)) {
@@ -858,7 +958,41 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 
             const validProductNamesList = validProducts.map(p => p.name);
 
-            const prompt = `
+            // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
+            let preParsedSuccess = true;
+            const preParsedItems = [];
+
+            for (const line of inputLines) {
+                const parts = line.trim().split(/\s+/);
+                const quantityStr = parts.pop();
+                const quantity = parseInt(quantityStr, 10);
+                const typedName = parts.join(' ').trim();
+
+                if (!isNaN(quantity) && typedName) {
+                    const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
+                    if (matchedName) {
+                        preParsedItems.push({
+                            typed: typedName,
+                            matchedName: matchedName,
+                            quantity: quantity
+                        });
+                    } else {
+                        preParsedSuccess = false;
+                        break;
+                    }
+                } else {
+                    preParsedSuccess = false;
+                    break;
+                }
+            }
+
+            let aiResult = null;
+            if (preParsedSuccess && preParsedItems.length > 0) {
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk Daily SO ${branch.code}. Hemat Token!`);
+                aiResult = { items: preParsedItems };
+            } else {
+                console.log(`[PRE-PARSER] Ada item tidak dikenal atau format bebas di Daily SO. Memanggil Gemini AI...`);
+                const prompt = `
 SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN, BASA-BASI, ATAU TEKS LAIN SEPERTI "Tentu,..." ATAU "Berikut adalah...".
 
 Anda adalah AI parser tangguh untuk laporan Stock Opname (SO) harian toko minuman.
@@ -881,16 +1015,16 @@ Aturan Penting Pencocokan:
     { "typed": "nama_input_staff", "matchedName": "NAMA_RESMI_DI_SPREADSHEET", "quantity": angka_jumlah }
   ]
 }
-            `.trim();
+                `.trim();
 
-            let aiResult = null;
-            for (const modelName of CANDIDATE_MODELS) {
-                try {
-                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
-                    const rawText = response.text || '';
-                    aiResult = parseJsonFromAi(rawText);
-                    if (aiResult && Array.isArray(aiResult.items)) break;
-                } catch (err) {}
+                for (const modelName of CANDIDATE_MODELS) {
+                    try {
+                        const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                        const rawText = response.text || '';
+                        aiResult = parseJsonFromAi(rawText);
+                        if (aiResult && Array.isArray(aiResult.items)) break;
+                    } catch (err) {}
+                }
             }
 
             if (!aiResult || !Array.isArray(aiResult.items)) {
