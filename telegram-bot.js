@@ -485,18 +485,7 @@ _Bot Cloud-Native Multi-Branch_ 🚀
         }
     });
 
-    // 6. /produksi
-    bot.command('produksi', async (ctx) => {
-        const fullText = ctx.message.text || '';
-        const lines = fullText.split('\n');
-        lines.shift(); // Remove command
-        const inputText = lines.join('\n').trim();
-
-        if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'produksi', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL PRODUKSI*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Produksi**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
-        }
-
+    async function processProduksiLogic(ctx, inputText) {
         if (!ai) {
             return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
         }
@@ -524,32 +513,18 @@ _Bot Cloud-Native Multi-Branch_ 🚀
                 range: `'${tabName}'!B1:D120`
             });
 
-            const rowsBtoD = readRes.data.values || [];
-            if (rowsBtoD.length === 0) {
-                return await ctx.reply(`❌ Gagal membaca produk dari tab "${tabName}". Pastikan tab tersebut sudah dibuat.`);
+            const rows = readRes.data.values || [];
+            if (rows.length === 0) {
+                return await ctx.reply(`❌ Gagal membaca data dari tab "${tabName}".`);
             }
 
-            let productionStartIdx = -1;
-            let wasteStartIdx = -1;
-
-            rowsBtoD.forEach((row, idx) => {
-                const cellVal = String(row[0] || '').trim().toUpperCase();
-                if (cellVal === 'PRODUCTION') productionStartIdx = idx;
-                else if (cellVal === 'WASTE') wasteStartIdx = idx;
-            });
-
-            if (productionStartIdx === -1) {
-                return await ctx.reply(`❌ Header "PRODUCTION" tidak ditemukan di kolom B pada tab "${tabName}".`);
-            }
-
-            const prodEndIdx = wasteStartIdx !== -1 ? wasteStartIdx : rowsBtoD.length;
             const productionProducts = [];
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                const prodName = String(row[0] || '').trim();
+                const existingQty = String(row[2] || '').trim();
 
-            for (let i = productionStartIdx + 1; i < prodEndIdx; i++) {
-                const prodName = String(rowsBtoD[i]?.[0] || '').trim();
-                const existingQty = String(rowsBtoD[i]?.[2] || '').trim();
-
-                if (prodName && !prodName.startsWith('---') && !prodName.includes('KODE')) {
+                if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
                     productionProducts.push({
                         name: prodName,
                         rowIndex: i + 1,
@@ -563,7 +538,7 @@ _Bot Cloud-Native Multi-Branch_ 🚀
             const prompt = `
 SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN, BASA-BASI, ATAU TEKS LAIN SEPERTI "Tentu,..." ATAU "Berikut adalah...".
 
-Anda adalah AI parser laporan produksi harian toko minuman.
+Anda adalah AI parser laporan produksi toko minuman.
 Tugas Anda:
 1. Analisis input:
 """
@@ -571,11 +546,6 @@ ${inputLines.join('\n')}
 """
 2. Cocokkan nama item yang diketik staff ke daftar nama produk RESMI yang ada di spreadsheet:
 ${JSON.stringify(validProductNamesList, null, 2)}
-
-Aturan Penting:
-- Lakukan fuzzy matching pintar (singkatan/singkatan khas toko, huruf besar/kecil diabaikan).
-- SINONIM: "herbal jelly" / "grass jelly" -> "HERBAL JELLY BASE".
-- Jika item tidak cocok, masukkan null di "matchedName".
 
 3. JSON Output bersih:
 {
@@ -586,34 +556,19 @@ Aturan Penting:
             `.trim();
 
             let aiResult = null;
-            let lastAiError = null;
-
             for (const modelName of CANDIDATE_MODELS) {
-                let attempts = 0;
-                while (attempts < 3) {
-                    try {
-                        const response = await ai.models.generateContent({ model: modelName, contents: prompt });
-                        const rawText = response.text || '';
-                        aiResult = parseJsonFromAi(rawText);
-                        if (aiResult && Array.isArray(aiResult.items)) break;
-                    } catch (err) {
-                        lastAiError = err;
-                        attempts++;
-                        if (err.message && (err.message.includes('overloaded') || err.message.includes('RESOURCE_EXHAUSTED') || err.status === 429 || err.status === 503)) {
-                            await new Promise(r => setTimeout(r, 1000 * attempts));
-                        } else {
-                            break; // non-retriable error
-                        }
-                    }
-                }
-                if (aiResult && Array.isArray(aiResult.items)) break;
+                try {
+                    const response = await ai.models.generateContent({ model: modelName, contents: prompt });
+                    const rawText = response.text || '';
+                    aiResult = parseJsonFromAi(rawText);
+                    if (aiResult && Array.isArray(aiResult.items)) break;
+                } catch (err) {}
             }
 
             if (!aiResult || !Array.isArray(aiResult.items)) {
-                return await ctx.reply(`❌ Gagal memparsing input dengan AI: ${lastAiError ? lastAiError.message : 'JSON Parsing error'}`);
+                return await ctx.reply(`❌ Gagal memparsing input produksi dengan AI.`);
             }
 
-            // Check Conflict
             const matchedOfficialItems = aiResult.items.filter(item => item.matchedName);
             const itemsWithConflict = [];
 
@@ -629,9 +584,8 @@ Aturan Penting:
             }
 
             if (itemsWithConflict.length > 0) {
-                const pendingId = `prod_${branch.code}_${ctx.from.id}_${Date.now()}`;
+                const pendingId = `pending_${Date.now()}_${ctx.from.id}`;
                 await db.collection('pending_inputs').doc(pendingId).set({
-                    branch: branch.code,
                     type: 'produksi',
                     tabName,
                     dateRaw,
@@ -667,13 +621,27 @@ Aturan Penting:
                 });
             }
 
-            // Direct Write
             await writeProduksiItems(sheets, spreadsheetId, tabName, aiResult.items, productionProducts, senderName, branch.code, ctx);
 
         } catch (err) {
             console.error(`[PRODUKSI_${branch.code}] Error:`, err);
             await ctx.reply(`❌ Terjadi kesalahan fatal: ${err.message}`);
         }
+    }
+
+    // 6. /produksi
+    bot.command('produksi', async (ctx) => {
+        const fullText = ctx.message.text || '';
+        const lines = fullText.split('\n');
+        lines.shift(); // Remove command
+        const inputText = lines.join('\n').trim();
+
+        if (!inputText) {
+            userPendingCommand.set(ctx.from.id, { command: 'produksi', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL PRODUKSI*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Produksi**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
+        }
+
+        return await processProduksiLogic(ctx, inputText);
     });
 
     // 5. /waste
@@ -683,11 +651,7 @@ Aturan Penting:
         lines.shift();
         const inputText = lines.join('\n').trim();
 
-        if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'waste', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL WASTE*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Waste (Dibuang)**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
-        }
-
+    async function processWasteLogic(ctx, inputText) {
         if (!ai) {
             return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
         }
@@ -821,20 +785,24 @@ ${JSON.stringify(validProductNamesList, null, 2)}
             console.error(`[WASTE_${branch.code}] Error:`, err);
             await ctx.reply(`❌ Error: ${err.message}`);
         }
-    });
+    }
 
-    // 5.5. /dailyso
-    bot.command('dailyso', async (ctx) => {
+    // 5. /waste
+    bot.command('waste', async (ctx) => {
         const fullText = ctx.message.text || '';
         const lines = fullText.split('\n');
         lines.shift();
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            userPendingCommand.set(ctx.from.id, { command: 'dailyso', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL DAILY SO*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Daily Stock Opname**.\n\n💡 *Contoh Kirim:* \`30.7.26\` atau \`30/07/2026\``, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'waste', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL WASTE*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Waste (Dibuang)**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
+        return await processWasteLogic(ctx, inputText);
+    });
+
+    async function processDailysoLogic(ctx, inputText) {
         if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
 
         const senderName = ctx.from.first_name || ctx.from.username || 'User';
@@ -981,6 +949,21 @@ Aturan Penting Pencocokan:
             console.error(`[DAILYSO_${branch.code}] Error:`, err);
             await ctx.reply(`❌ Error: ${err.message}`);
         }
+    }
+
+    // 5.5. /dailyso
+    bot.command('dailyso', async (ctx) => {
+        const fullText = ctx.message.text || '';
+        const lines = fullText.split('\n');
+        lines.shift();
+        const inputText = lines.join('\n').trim();
+
+        if (!inputText) {
+            userPendingCommand.set(ctx.from.id, { command: 'dailyso', step: 'date', timestamp: Date.now() });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL DAILY SO*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Daily Stock Opname**.\n\n💡 *Contoh Kirim:* \`30.7.26\` atau \`30/07/2026\``, { parse_mode: 'Markdown' });
+        }
+
+        return await processDailysoLogic(ctx, inputText);
     });
 
     // 6. /morningbriefing & aliases
@@ -1262,14 +1245,13 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
                 // Step 2 done: Received items data, combine date + items and execute command
                 userPendingCommand.delete(userId); // Clear session
                 const fullPayload = `${pending.date}\n${text.trim()}`;
-                ctx.message.text = `/${pending.command}\n${fullPayload}`;
                 
                 if (pending.command === 'produksi') {
-                    return await bot.handleUpdate(ctx.update);
+                    return await processProduksiLogic(ctx, fullPayload);
                 } else if (pending.command === 'waste') {
-                    return await bot.handleUpdate(ctx.update);
+                    return await processWasteLogic(ctx, fullPayload);
                 } else if (pending.command === 'dailyso') {
-                    return await bot.handleUpdate(ctx.update);
+                    return await processDailysoLogic(ctx, fullPayload);
                 }
             }
         }
