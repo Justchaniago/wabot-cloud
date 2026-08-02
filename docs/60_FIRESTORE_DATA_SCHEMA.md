@@ -35,3 +35,14 @@ Logs real-time Gemini AI token metrics for cost reporting (`/usage`).
   "timestamp": "2026-08-03T00:00:00.000Z"
 }
 ```
+
+### 3. `telegram_chats`
+Stores automatically captured Telegram group/supergroup Chat IDs for dynamic reminder delivery. Document ID is the branch code (`TP` or `PM`).
+
+```json
+{
+  "chatId": -1001234567890,
+  "title": "Cabang TP - GC-TP6",
+  "updatedAt": "2026-08-03T00:00:00.000Z"
+}
+```

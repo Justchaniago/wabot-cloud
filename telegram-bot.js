@@ -513,8 +513,13 @@ _Bot Cloud-Native Multi-Branch_ 🚀
                 (result.data.valueRanges || []).forEach((valueRange, index) => {
                     const day = existingDays[index];
                     const status = getProductionWasteStatus(valueRange.values || []);
-                    if (!status.productionFilled) missingProduction.push(day);
-                    if (!status.wasteFilled) missingWaste.push(day);
+                    // If production is filled, day is considered filled (waste can be empty)
+                    if (!status.productionFilled) {
+                        missingProduction.push(day);
+                        if (!status.wasteFilled) {
+                            missingWaste.push(day);
+                        }
+                    }
                 });
             }
 
@@ -1736,10 +1741,15 @@ async function startTelegramScheduler() {
                             console.warn(`[TELEGRAM_SCHEDULER] Error checking Daily SO for ${branch.code}:`, err.message);
                         }
 
-                        if (!productionFilled || !wasteFilled || !dailySoFilled) {
+                        // Production filled makes waste optional. If production is missing, check both.
+                        const prodWasteMissing = !productionFilled;
+
+                        if (prodWasteMissing || !dailySoFilled) {
                             const missing = [];
-                            if (!productionFilled) missing.push('Laporan Produksi');
-                            if (!wasteFilled) missing.push('Laporan Waste');
+                            if (!productionFilled) {
+                                missing.push('Laporan Produksi');
+                                if (!wasteFilled) missing.push('Laporan Waste');
+                            }
                             if (!dailySoFilled) missing.push('Daily Stock Opname');
 
                             const reminderText = `
@@ -1841,10 +1851,15 @@ Terima kasih atas kerja samanya! 🚀
                             console.warn(`[TELEGRAM_SCHEDULER] Error checking Daily SO for ${branch.code}:`, err.message);
                         }
 
-                        if (!productionFilled || !wasteFilled || !dailySoFilled) {
+                        // Production filled makes waste optional. If production is missing, check both.
+                        const prodWasteMissing = !productionFilled;
+
+                        if (prodWasteMissing || !dailySoFilled) {
                             const missing = [];
-                            if (!productionFilled) missing.push('Laporan Produksi');
-                            if (!wasteFilled) missing.push('Laporan Waste');
+                            if (!productionFilled) {
+                                missing.push('Laporan Produksi');
+                                if (!wasteFilled) missing.push('Laporan Waste');
+                            }
                             if (!dailySoFilled) missing.push('Daily Stock Opname');
 
                             const alertText = `

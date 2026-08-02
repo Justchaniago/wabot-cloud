@@ -8,7 +8,7 @@
 
 | Subsystem / Task | Target Code | Context Doc |
 | :--- | :--- | :--- |
-| **Telegram Bot Multi-Branch** | `telegram-bot.js:1-1465` | [`docs/10_TELEGRAM_BOT.md`](file:///Users/f/Documents/wabot-cloud/docs/10_TELEGRAM_BOT.md) |
+| **Telegram Bot Multi-Branch** | `telegram-bot.js:1-1938` | [`docs/10_TELEGRAM_BOT.md`](file:///Users/f/Documents/wabot-cloud/docs/10_TELEGRAM_BOT.md) |
 | **React Control Panel UI** | `panel/src/App.jsx:1-350` | [`docs/30_FRONTEND_PANEL.md`](file:///Users/f/Documents/wabot-cloud/docs/30_FRONTEND_PANEL.md) |
 | **Control Panel API / Socket** | `panel-server.js:1-154` | [`docs/40_CONTROL_PANEL_SERVER.md`](file:///Users/f/Documents/wabot-cloud/docs/40_CONTROL_PANEL_SERVER.md) |
 | **Firestore Schemas** | Firestore Collections | [`docs/60_FIRESTORE_DATA_SCHEMA.md`](file:///Users/f/Documents/wabot-cloud/docs/60_FIRESTORE_DATA_SCHEMA.md) |
