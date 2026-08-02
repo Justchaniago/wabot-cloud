@@ -119,6 +119,21 @@ export default function App() {
     handleAction('exec-command', { command: cmd });
   };
 
+  const formatUptime = (seconds) => {
+    if (!seconds || seconds <= 0) return '0s';
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0 || h > 0 || d > 0) parts.push(`${m}m`);
+    parts.push(`${s}s`);
+    return parts.join(' ');
+  };
+
   return (
     <div className="mobile-app-shell">
       {/* Top Header */}
@@ -161,7 +176,7 @@ export default function App() {
               <div className="metrics-grid">
                 <div className="metric-box">
                   <span className="metric-lbl">Uptime</span>
-                  <div className="metric-val">{Math.floor(status.server.uptime / 60)}m {status.server.uptime % 60}s</div>
+                  <div className="metric-val">{formatUptime(status.server.uptime)}</div>
                 </div>
                 <div className="metric-box">
                   <span className="metric-lbl">RAM Used</span>

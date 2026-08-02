@@ -616,7 +616,44 @@ ${branch.morningTemplate}
         await ctx.reply(`✅ *Closing Briefing ${branch.code} Terformat:*\n\n${inputText}`, { parse_mode: 'Markdown' });
     });
 
-    // 8. Interactive Callback Queries for Overwrite Confirmations
+    // 8. /ai - Tanya Gemini AI
+    bot.command('ai', async (ctx) => {
+        const fullText = ctx.message.text || '';
+        const prompt = fullText.replace(/^\/ai(@\w+)?\s*/i, '').trim();
+
+        if (!prompt) {
+            return await ctx.reply('⚠️ *Format /ai Salah!*\nContoh: `/ai Siapa presiden Indonesia pertama?`', { parse_mode: 'Markdown' });
+        }
+
+        if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+
+        await ctx.reply('⏳ *Gemini AI sedang berpikir...*', { parse_mode: 'Markdown' });
+
+        let replyText = null;
+        let lastError = null;
+
+        for (const modelName of CANDIDATE_MODELS) {
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelName,
+                    contents: prompt,
+                });
+                replyText = response.text;
+                if (replyText) break;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+
+        if (replyText) {
+            await ctx.reply(replyText);
+        } else {
+            const errMessage = lastError ? lastError.message : 'Tidak ada respon dari AI.';
+            await ctx.reply(`❌ Error Gemini AI: ${errMessage}`);
+        }
+    });
+
+    // 9. Interactive Callback Queries for Overwrite Confirmations
     bot.action(/overwrite_yes:(.+)/, async (ctx) => {
         const pendingId = ctx.match[1];
         try {
