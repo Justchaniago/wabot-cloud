@@ -231,6 +231,7 @@ const activeBots = [];
 // Initialize each Telegram bot
 function setupBot(branch) {
     const bot = new Telegraf(branch.token);
+    const userPendingCommand = new Map();
 
     // 1. /start & /help
     bot.command(['start', 'help'], async (ctx) => {
@@ -315,7 +316,11 @@ _Bot Cloud-Native Multi-Branch_ 🚀
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            return await ctx.reply(`⚠️ *Format /produksi Salah!*\n\n*Contoh Kirim:*\n/produksi\n1.8.26\nbt lokal 250\ngt 100`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'produksi', timestamp: Date.now() });
+            return await ctx.reply(`📌 *Siap mencatat Laporan Produksi!*\n\nSilakan kirimkan data produksi Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
+1.8.26
+bt lokal 250
+gt 100`, { parse_mode: 'Markdown' });
         }
 
         if (!ai) {
@@ -505,7 +510,11 @@ Aturan Penting:
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            return await ctx.reply(`⚠️ *Format /waste Salah!*\n\n*Contoh Kirim:*\n/waste\n1.8.26\nbt lokal 10\ngt 5`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'waste', timestamp: Date.now() });
+            return await ctx.reply(`📌 *Siap mencatat Laporan Waste (Dibuang)!*\n\nSilakan kirimkan data waste Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
+1.8.26
+bt lokal 10
+gt 5`, { parse_mode: 'Markdown' });
         }
 
         if (!ai) {
@@ -651,7 +660,11 @@ ${JSON.stringify(validProductNamesList, null, 2)}
         const inputText = lines.join('\n').trim();
 
         if (!inputText) {
-            return await ctx.reply(`⚠️ *Format /dailyso Salah!*\n\n*Contoh Kirim:*\n/dailyso\n30.7.26\ngong cha y16 cups 10\nfresh milk diamond 5`, { parse_mode: 'Markdown' });
+            userPendingCommand.set(ctx.from.id, { command: 'dailyso', timestamp: Date.now() });
+            return await ctx.reply(`📌 *Siap mencatat Daily Stock Opname (SO)!*\n\nSilakan kirimkan data Daily SO Anda tanpa mengawali dengan slash command lagi.\n\n*Contoh Kirim:*
+30.7.26
+gong cha y16 cups 10
+fresh milk diamond 5`, { parse_mode: 'Markdown' });
         }
 
         if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
@@ -1047,12 +1060,29 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
         await ctx.reply(text, { parse_mode: 'Markdown' });
     });
 
-    // 11. Handle continuous text in AI Chat Mode
+    // 11. Handle continuous text for Pending Commands or AI Chat Mode
     bot.on('text', async (ctx, next) => {
         const text = ctx.message.text || '';
         if (text.startsWith('/')) return next();
 
         const userId = ctx.from.id;
+
+        // Check if user has a pending command session (e.g. /produksi, /waste, /dailyso without payload)
+        if (userPendingCommand.has(userId)) {
+            const pending = userPendingCommand.get(userId);
+            userPendingCommand.delete(userId); // Clear session
+
+            // Synthesize command message
+            ctx.message.text = `/${pending.command}\n${text}`;
+            if (pending.command === 'produksi') {
+                return await bot.handleUpdate(ctx.update);
+            } else if (pending.command === 'waste') {
+                return await bot.handleUpdate(ctx.update);
+            } else if (pending.command === 'dailyso') {
+                return await bot.handleUpdate(ctx.update);
+            }
+        }
+
         if (!aiSessions.has(userId)) return next();
 
         if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
