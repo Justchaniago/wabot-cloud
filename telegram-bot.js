@@ -547,8 +547,8 @@ ${JSON.stringify(validProductNamesList, null, 2)}
         }
     });
 
-    // 6. /morningbriefing & /morningbreafingtp & /morningbreafingpms
-    bot.command(['morningbriefing', 'morningbreafingtp', 'morningbreafingpms'], async (ctx) => {
+    // 6. /morningbriefing & aliases
+    bot.command(['morningbriefing', 'morningbreafing', 'morningbreafingtp', 'morningbreafingpms', 'morningbriefingtp', 'morningbriefingpms'], async (ctx) => {
         const fullText = ctx.message.text || '';
         const lines = fullText.split('\n');
         lines.shift();
@@ -598,7 +598,25 @@ ${branch.morningTemplate}
         await ctx.reply(`✅ *Morning Briefing ${branch.code} Terformat:*\n\n${jsonResult.formattedText}`, { parse_mode: 'Markdown' });
     });
 
-    // 7. Interactive Callback Queries for Overwrite Confirmations
+    // 7. /closingbriefing & aliases
+    bot.command(['closingbriefing', 'closingbreafing', 'closingbreafingtp', 'closingbreafingpms', 'closingbriefingtp', 'closingbriefingpms'], async (ctx) => {
+        const fullText = ctx.message.text || '';
+        const lines = fullText.split('\n');
+        lines.shift();
+        const inputText = lines.join('\n').trim();
+
+        if (!inputText) {
+            return await ctx.reply(`⚠️ *Format Closing Briefing Salah!*`, { parse_mode: 'Markdown' });
+        }
+
+        if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+
+        await ctx.reply(`⏳ Memproses Closing Briefing ${branch.code}...`);
+
+        await ctx.reply(`✅ *Closing Briefing ${branch.code} Terformat:*\n\n${inputText}`, { parse_mode: 'Markdown' });
+    });
+
+    // 8. Interactive Callback Queries for Overwrite Confirmations
     bot.action(/overwrite_yes:(.+)/, async (ctx) => {
         const pendingId = ctx.match[1];
         try {
@@ -755,8 +773,13 @@ async function main() {
         }
     }
 
-    app.listen(PORT, () => {
-        console.log(`[HTTP] Control Panel web server running on port ${PORT}`);
+    const http = require('http');
+    const setupPanelServer = require('./panel-server');
+    const server = http.createServer(app);
+    const { broadcastLog } = setupPanelServer(app, server);
+
+    server.listen(PORT, () => {
+        console.log(`[HTTP] Telegram Control Panel web server running on port ${PORT}`);
     });
 
     // Graceful Shutdown
