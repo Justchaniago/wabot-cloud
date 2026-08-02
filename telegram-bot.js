@@ -322,15 +322,51 @@ function setupBot(branch) {
     const bot = new Telegraf(branch.token);
     const userPendingCommand = new Map();
 
-    // --- INTERSEPTOR GLOBAL ANTI-EMOTICON & ANTI-EMOJI ---
+    // --- INTERSEPTOR GLOBAL ANTI-EMOTICON & ANTI-EMOJI + NATURAL HUMAN REWRITER ---
     bot.use(async (ctx, next) => {
         const hapusEmoticonDanIkon = (text) => {
             if (!text) return '';
+            
             // 1. Bersihkan seluruh rentang karakter Unicode Emoji, Simbol, Dingbats, dan Emoticon
             let bersih = text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E0}-\u{1F1FF}\u{1F191}-\u{1F251}\u{1F004}\u{1F0CF}\u{1F170}-\u{1F171}\u{1F17E}-\u{1F17F}\u{1F18E}\u{3030}\u{2B50}\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2190}-\u{21FF}]/gu, '');
+            
             // 2. Ubah bullet tebal (•) menjadi strip (-)
             bersih = bersih.replace(/•/g, '-');
-            return bersih;
+
+            // 3. TATA ULANG DIKSI KAKU MENJADI NATURAL & HUMAN-LIKE
+            // Mengubah sambutan start robotik
+            bersih = bersih.replace(/TELEGRAM REPORT BOT -/gi, 'Halo! Ini bot laporan');
+            bersih = bersih.replace(/Selamat datang! Gunakan bot ini untuk/gi, 'Senang bisa membantu. Di sini kamu bisa langsung');
+            bersih = bersih.replace(/DAFTAR PERINTAH AKTIF:/gi, 'Pilihan perintah yang bisa kamu gunakan:');
+            bersih = bersih.replace(/Contoh Format Input/gi, 'Cara pengisian cepat');
+
+            // Mengubah status koneksi & pengecekan kaku
+            bersih = bersih.replace(/Mengecek Daily SO/gi, 'Sebentar ya, saya cek dulu laporan Daily SO');
+            bersih = bersih.replace(/Mengecek Produksi dan Waste/gi, 'Tunggu sebentar, saya periksa dulu laporan Produksi dan Waste');
+            bersih = bersih.replace(/sampai kemarin\.\.\./gi, 'dari kemarin...');
+            bersih = bersih.replace(/Periode:/gi, 'Untuk tanggal:');
+            bersih = bersih.replace(/Semua tanggal pada periode ini sudah terisi untuk/gi, 'Bagus! Semua laporan sudah lengkap terisi untuk');
+            bersih = bersih.replace(/Tanggal belum diisi:/gi, 'Ada beberapa tanggal yang belum sempat diisi:');
+            
+            // Mengubah konfirmasi sukses pengisian
+            bersih = bersih.replace(/PRODUKSI BERHASIL DICATAT/gi, 'Laporan produksi sudah berhasil masuk ke spreadsheet');
+            bersih = bersih.replace(/WASTE BERHASIL DICATAT/gi, 'Laporan waste sudah sukses dicatat');
+            bersih = bersih.replace(/DAILY SO BERHASIL DICATAT/gi, 'Laporan Daily SO sudah masuk dengan aman');
+            bersih = bersih.replace(/Oleh:/gi, 'Pengisi:');
+            bersih = bersih.replace(/Tab:/gi, 'Tanggal:');
+            bersih = bersih.replace(/Item tidak dikenali:/gi, 'Ada item yang sepertinya salah ketik atau belum terdaftar:');
+
+            // Mengubah status server & testing kaku
+            bersih = bersih.replace(/TELEGRAM BOT STATUS/gi, 'Laporan Status Bot saat ini');
+            bersih = bersih.replace(/Environment:/gi, 'Sistem:');
+            bersih = bersih.replace(/RAM Usage:/gi, 'Memori terpakai:');
+            bersih = bersih.replace(/Testing Google Sheets API connection for/gi, 'Mencoba tes koneksi ke Google Sheets');
+            bersih = bersih.replace(/Connection Success!/gi, 'koneksinya lancar dan sukses!');
+            
+            // Merapikan garis pembatas robotik berlebihan
+            bersih = bersih.replace(/-{30,}/g, '---');
+
+            return bersih.trim();
         };
 
         // Intersepsi fungsi reply biasa
