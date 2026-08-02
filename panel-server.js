@@ -19,9 +19,9 @@ function setupPanelServer(app, server) {
     io.emit('log:stream', { type, message });
   };
 
-  // Helper WA Bot status broadcaster
-  const broadcastWaBotStatus = (data) => {
-    io.emit('wabot:status', data);
+  // Helper Bot status broadcaster
+  const broadcastBotStatus = (data) => {
+    io.emit('bot:status', data);
   };
 
   // Broadcast server stats every 3 seconds
@@ -39,39 +39,10 @@ function setupPanelServer(app, server) {
 
   app.post('/api/panel/restart-bot', (req, res) => {
     broadcastLog('WARN', 'Restart signal received from Web Control Panel');
-    if (global.restartWaBotHandler) {
-      global.restartWaBotHandler();
+    if (global.restartBotHandler) {
+      global.restartBotHandler();
     }
     res.json({ success: true, message: 'Restart triggered' });
-  });
-
-  app.post('/api/panel/request-pairing', async (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Nomor telepon wajib diisi' });
-    
-    broadcastLog('INFO', `Requesting pairing code for: ${phone}`);
-    if (global.requestPairingCodeHandler) {
-      try {
-        const code = await global.requestPairingCodeHandler(phone);
-        res.json({ success: true, code, message: 'Kode pairing berhasil dibuat' });
-      } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-      }
-    } else {
-      res.status(500).json({ success: false, error: 'WhatsApp socket belum siap' });
-    }
-  });
-
-  app.post('/api/panel/reconnect-bot', (req, res) => {
-    broadcastLog('INFO', 'Reconnect signal triggered from Mobile Panel');
-    if (global.restartWaBotHandler) global.restartWaBotHandler();
-    res.json({ success: true, message: 'Reconnection sequence initiated' });
-  });
-
-  app.post('/api/panel/clear-session', (req, res) => {
-    broadcastLog('WARN', 'Session reset triggered from Mobile Panel');
-    if (global.clearFirestoreSessionHandler) global.clearFirestoreSessionHandler();
-    res.json({ success: true, message: 'Firestore session reset triggered' });
   });
 
   app.post('/api/panel/exec-command', (req, res) => {
@@ -114,14 +85,14 @@ function setupPanelServer(app, server) {
       const uptimeSec = Math.floor(process.uptime());
       const cpuUsage = `${Math.round((1 - freeMem / totalMem) * 100)}%`;
 
-      const systemContext = `Anda adalah AI DevOps Assistant cerdas terintegrasi langsung di WABOT Control Panel.
-Anda memiliki akses REAL-TIME ke status server dan WhatsApp Bot saat ini:
+      const systemContext = `Anda adalah AI DevOps Assistant cerdas terintegrasi langsung di Telegram Bot Control Panel.
+Anda memiliki akses REAL-TIME ke status server dan Telegram Bot saat ini:
 - Server Uptime: ${Math.floor(uptimeSec / 60)} menit ${uptimeSec % 60} detik
 - Penggunaan Memori/RAM: ${usedMemMB} MB / ${Math.round(totalMem / (1024 * 1024))} MB
 - Estimasi CPU Load: ${cpuUsage}
 - Platform OS: ${os.type()} ${os.release()} (${os.arch()})
 - Node.js Version: ${process.version}
-- GCP Project ID: project-a2bb3a13-c8e1-4097-92d (wabot-server)
+- GCP Project ID: project-a2bb3a13-c8e1-4097-92d
 
 Jawab pertanyaan user secara singkat, tepat, ramah, dan gunakan data statistik real-time di atas jika ditanyakan.`;
 
@@ -147,7 +118,7 @@ Jawab pertanyaan user secara singkat, tepat, ramah, dan gunakan data statistik r
     broadcastLog('INFO', `Panel Client Connected [ID: ${socket.id}]`);
   });
 
-  return { io, broadcastLog, broadcastWaBotStatus };
+  return { io, broadcastLog, broadcastBotStatus };
 }
 
 module.exports = setupPanelServer;

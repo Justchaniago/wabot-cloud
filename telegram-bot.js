@@ -390,6 +390,23 @@ function setupBot(branch) {
         return next();
     });
 
+    // Automatically capture and store Group Chat ID
+    bot.use(async (ctx, next) => {
+        if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup')) {
+            const branchCode = branch.code;
+            try {
+                await db.collection('telegram_chats').doc(branchCode).set({
+                    chatId: ctx.chat.id,
+                    title: ctx.chat.title || '',
+                    updatedAt: new Date()
+                }, { merge: true });
+            } catch (err) {
+                console.error(`[CHAT_ID_SAVE_ERR] Failed to save chat ID for ${branchCode}:`, err.message);
+            }
+        }
+        return next();
+    });
+
     // 1. /start & /help
     bot.command(['start', 'help'], async (ctx) => {
         const welcomeText = `
@@ -1626,6 +1643,242 @@ app.get('/', (req, res) => {
     `);
 });
 
+const telegramSentReminders = {
+    soft: null, // Format: 'YYYY-MM-DD'
+    hard: null  // Format: 'YYYY-MM-DD'
+};
+
+async function startTelegramScheduler() {
+    console.log('[TELEGRAM_SCHEDULER] Background scheduler started successfully for 21:45 & 22:00 WIB.');
+
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const timeOptions = { timeZone: 'Asia/Jakarta', hour: 'numeric', minute: 'numeric', hour12: false };
+            const dateOptions = { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' };
+
+            const timeParts = new Intl.DateTimeFormat('en-US', timeOptions).formatToParts(now);
+            const hour = parseInt(timeParts.find(p => p.type === 'hour').value, 10);
+            const minute = parseInt(timeParts.find(p => p.type === 'minute').value, 10);
+
+            const dateParts = new Intl.DateTimeFormat('en-US', dateOptions).formatToParts(now);
+            const yearStr = dateParts.find(p => p.type === 'year').value;
+            const monthStr = dateParts.find(p => p.type === 'month').value;
+            const dayStr = dateParts.find(p => p.type === 'day').value;
+            const dateKey = `${yearStr}-${monthStr}-${dayStr}`;
+            const currentDayInt = parseInt(dayStr, 10);
+
+            // 1. Soft Reminder: 21:45 WIB
+            if (hour === 21 && minute === 45) {
+                if (telegramSentReminders.soft !== dateKey) {
+                    telegramSentReminders.soft = dateKey;
+                    console.log(`[TELEGRAM_SCHEDULER] Triggering 21:45 Soft Reminder check for date: ${dateKey}`);
+
+                    for (const key in BRANCHES) {
+                        const branch = BRANCHES[key];
+                        let targetChatId = process.env[`TELEGRAM_CHAT_ID_${branch.code}`];
+                        
+                        if (!targetChatId) {
+                            try {
+                                const chatDoc = await db.collection('telegram_chats').doc(branch.code).get();
+                                if (chatDoc.exists) {
+                                    targetChatId = chatDoc.data().chatId;
+                                }
+                            } catch (err) {
+                                console.error(`[TELEGRAM_SCHEDULER] Failed to get chat ID for ${branch.code} from Firestore:`, err.message);
+                            }
+                        }
+
+                        if (!targetChatId) {
+                            console.warn(`[TELEGRAM_SCHEDULER] No chat ID found for branch ${branch.code}. Skipping soft reminder.`);
+                            continue;
+                        }
+
+                        const sheets = await getSheetsClient();
+                        const tabName = `${currentDayInt} - ${yearStr}`;
+
+                        let productionFilled = false;
+                        let wasteFilled = false;
+                        try {
+                            const prodSpreadsheetId = branch.spreadsheets.produksi;
+                            const prodRes = await sheets.spreadsheets.values.get({
+                                spreadsheetId: prodSpreadsheetId,
+                                range: `'${tabName}'!B1:D120`
+                            });
+                            const prodStatus = getProductionWasteStatus(prodRes.data.values || []);
+                            productionFilled = prodStatus.productionFilled;
+                            wasteFilled = prodStatus.wasteFilled;
+                        } catch (err) {
+                            console.warn(`[TELEGRAM_SCHEDULER] Error checking prod/waste for ${branch.code}:`, err.message);
+                        }
+
+                        let dailySoFilled = false;
+                        try {
+                            const soSpreadsheetId = branch.spreadsheets.dailyso;
+                            const metaRes = await sheets.spreadsheets.get({
+                                spreadsheetId: soSpreadsheetId,
+                                fields: 'sheets.properties.title'
+                            });
+                            const sheetTitles = (metaRes.data.sheets || []).map(sheet => sheet.properties.title);
+                            const defaultTab = sheetTitles[0];
+                            const datedTab = `${currentDayInt} - ${yearStr}`;
+                            const targetTab = sheetTitles.includes(datedTab) ? datedTab : defaultTab;
+                            const columnLetter = colIndexToLetter(3 + currentDayInt);
+
+                            if (targetTab) {
+                                const soRes = await sheets.spreadsheets.values.get({
+                                    spreadsheetId: soSpreadsheetId,
+                                    range: `'${targetTab}'!B1:${columnLetter}150`
+                                });
+                                dailySoFilled = getDailySoStatus(soRes.data.values || [], currentDayInt);
+                            }
+                        } catch (err) {
+                            console.warn(`[TELEGRAM_SCHEDULER] Error checking Daily SO for ${branch.code}:`, err.message);
+                        }
+
+                        if (!productionFilled || !wasteFilled || !dailySoFilled) {
+                            const missing = [];
+                            if (!productionFilled) missing.push('Laporan Produksi');
+                            if (!wasteFilled) missing.push('Laporan Waste');
+                            if (!dailySoFilled) missing.push('Daily Stock Opname');
+
+                            const reminderText = `
+🔔 *PENGINGAT (SOFT REMINDER)*
+Halo rekan-rekan *${branch.name}*!
+
+Mohon kerja samanya untuk segera melengkapi data operasional hari ini. Sistem mendeteksi beberapa data belum terisi:
+${missing.map(m => `❌ *${m}* belum diisi`).join('\n')}
+
+Silakan gunakan perintah berikut di bot ini:
+- \`/produksi [data]\`
+- \`/waste [data]\`
+- \`/dailyso [data]\`
+
+Terima kasih atas kerja samanya! 🚀
+                            `.trim();
+
+                            try {
+                                const botInstance = activeBots.find(b => b.token === branch.token);
+                                if (botInstance) {
+                                    await botInstance.telegram.sendMessage(targetChatId, reminderText, { parse_mode: 'Markdown' });
+                                    console.log(`[TELEGRAM_SCHEDULER] Sent 21:45 Soft Reminder to ${branch.code} (Chat ID: ${targetChatId})`);
+                                }
+                            } catch (err) {
+                                console.error(`[TELEGRAM_SCHEDULER] Failed to send 21:45 Soft Reminder to ${branch.code}:`, err.message);
+                            }
+                        } else {
+                            console.log(`[TELEGRAM_SCHEDULER] ${branch.code} has filled all reports. Skipping soft reminder.`);
+                        }
+                    }
+                }
+            }
+
+            // 2. Hard Alert: 22:00 WIB
+            if (hour === 22 && minute === 0) {
+                if (telegramSentReminders.hard !== dateKey) {
+                    telegramSentReminders.hard = dateKey;
+                    console.log(`[TELEGRAM_SCHEDULER] Triggering 22:00 Hard Alert check for date: ${dateKey}`);
+
+                    for (const key in BRANCHES) {
+                        const branch = BRANCHES[key];
+                        let targetChatId = process.env[`TELEGRAM_CHAT_ID_${branch.code}`];
+                        
+                        if (!targetChatId) {
+                            try {
+                                const chatDoc = await db.collection('telegram_chats').doc(branch.code).get();
+                                if (chatDoc.exists) {
+                                    targetChatId = chatDoc.data().chatId;
+                                }
+                            } catch (err) {
+                                console.error(`[TELEGRAM_SCHEDULER] Failed to get chat ID for ${branch.code} from Firestore:`, err.message);
+                            }
+                        }
+
+                        if (!targetChatId) {
+                            console.warn(`[TELEGRAM_SCHEDULER] No chat ID found for branch ${branch.code}. Skipping hard alert.`);
+                            continue;
+                        }
+
+                        const sheets = await getSheetsClient();
+                        const tabName = `${currentDayInt} - ${yearStr}`;
+
+                        let productionFilled = false;
+                        let wasteFilled = false;
+                        try {
+                            const prodSpreadsheetId = branch.spreadsheets.produksi;
+                            const prodRes = await sheets.spreadsheets.values.get({
+                                spreadsheetId: prodSpreadsheetId,
+                                range: `'${tabName}'!B1:D120`
+                            });
+                            const prodStatus = getProductionWasteStatus(prodRes.data.values || []);
+                            productionFilled = prodStatus.productionFilled;
+                            wasteFilled = prodStatus.wasteFilled;
+                        } catch (err) {
+                            console.warn(`[TELEGRAM_SCHEDULER] Error checking prod/waste for ${branch.code}:`, err.message);
+                        }
+
+                        let dailySoFilled = false;
+                        try {
+                            const soSpreadsheetId = branch.spreadsheets.dailyso;
+                            const metaRes = await sheets.spreadsheets.get({
+                                spreadsheetId: soSpreadsheetId,
+                                fields: 'sheets.properties.title'
+                            });
+                            const sheetTitles = (metaRes.data.sheets || []).map(sheet => sheet.properties.title);
+                            const defaultTab = sheetTitles[0];
+                            const datedTab = `${currentDayInt} - ${yearStr}`;
+                            const targetTab = sheetTitles.includes(datedTab) ? datedTab : defaultTab;
+                            const columnLetter = colIndexToLetter(3 + currentDayInt);
+
+                            if (targetTab) {
+                                const soRes = await sheets.spreadsheets.values.get({
+                                    spreadsheetId: soSpreadsheetId,
+                                    range: `'${targetTab}'!B1:${columnLetter}150`
+                                });
+                                dailySoFilled = getDailySoStatus(soRes.data.values || [], currentDayInt);
+                            }
+                        } catch (err) {
+                            console.warn(`[TELEGRAM_SCHEDULER] Error checking Daily SO for ${branch.code}:`, err.message);
+                        }
+
+                        if (!productionFilled || !wasteFilled || !dailySoFilled) {
+                            const missing = [];
+                            if (!productionFilled) missing.push('Laporan Produksi');
+                            if (!wasteFilled) missing.push('Laporan Waste');
+                            if (!dailySoFilled) missing.push('Daily Stock Opname');
+
+                            const alertText = `
+🚨 *ALERT KERAS: LAPORAN BELUM LENGKAP!*
+Halo rekan-rekan *${branch.name}*!
+
+Sistem mendeteksi bahwa waktu sudah menunjukkan pukul *22.00 WIB* dan laporan berikut *MASIH BELUM DIINPUT*:
+${missing.map(m => `⚠️ *${m}* BELUM DIISI!`).join('\n')}
+
+*Harap segera diisi sekarang juga!* Kelalaian pengisian data akan mempengaruhi laporan harian cabang.
+                            `.trim();
+
+                            try {
+                                const botInstance = activeBots.find(b => b.token === branch.token);
+                                if (botInstance) {
+                                    await botInstance.telegram.sendMessage(targetChatId, alertText, { parse_mode: 'Markdown' });
+                                    console.log(`[TELEGRAM_SCHEDULER] Sent 22:00 Hard Alert to ${branch.code} (Chat ID: ${targetChatId})`);
+                                }
+                            } catch (err) {
+                                console.error(`[TELEGRAM_SCHEDULER] Failed to send 22:00 Hard Alert to ${branch.code}:`, err.message);
+                            }
+                        } else {
+                            console.log(`[TELEGRAM_SCHEDULER] ${branch.code} completed all reports before 22:00. Skipping hard alert.`);
+                        }
+                    }
+                }
+            }
+
+        } catch (err) {
+            console.error('[TELEGRAM_SCHEDULER] Error in scheduler loop:', err.message);
+        }
+    }, 30000);
+}
+
 // Start Both Bots & Web Server
 async function main() {
     console.log('[TELEGRAM] Initializing Telegram Bots for TP and PM...');
@@ -1641,6 +1894,9 @@ async function main() {
             console.error(`[TELEGRAM] Error starting Bot ${branch.code}:`, err.message);
         }
     }
+
+    // Start background scheduler for Telegram bot
+    startTelegramScheduler();
 
     const http = require('http');
     const setupPanelServer = require('./panel-server');
