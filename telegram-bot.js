@@ -181,6 +181,23 @@ async function getSheetsClient() {
     }
 }
 
+// Helper to safely extract and parse JSON from AI response
+function parseJsonFromAi(text) {
+    if (!text) return null;
+    let clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    try {
+        return JSON.parse(clean);
+    } catch (e) {
+        const match = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+        if (match) {
+            try {
+                return JSON.parse(match[0]);
+            } catch (e2) {}
+        }
+    }
+    return null;
+}
+
 // Convert 1-based column index to Letter A, B, C...
 function colIndexToLetter(col) {
     let temp = '';
@@ -365,6 +382,8 @@ _Bot Cloud-Native Multi-Branch_ 🚀
             const validProductNamesList = productionProducts.map(p => p.name);
 
             const prompt = `
+SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN, BASA-BASI, ATAU TEKS LAIN SEPERTI "Tentu,..." ATAU "Berikut adalah...".
+
 Anda adalah AI parser laporan produksi harian toko minuman.
 Tugas Anda:
 1. Analisis input:
@@ -396,8 +415,7 @@ Aturan Penting:
                     try {
                         const response = await ai.models.generateContent({ model: modelName, contents: prompt });
                         const rawText = response.text || '';
-                        const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-                        aiResult = JSON.parse(cleanJson);
+                        aiResult = parseJsonFromAi(rawText);
                         if (aiResult && Array.isArray(aiResult.items)) break;
                     } catch (err) {
                         lastAiError = err;
@@ -571,8 +589,7 @@ ${JSON.stringify(validProductNamesList, null, 2)}
                 try {
                     const response = await ai.models.generateContent({ model: modelName, contents: prompt });
                     const rawText = response.text || '';
-                    const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-                    aiResult = JSON.parse(cleanJson);
+                    aiResult = parseJsonFromAi(rawText);
                     if (aiResult && Array.isArray(aiResult.items)) break;
                 } catch (err) {}
             }
@@ -664,8 +681,7 @@ ${branch.morningTemplate}
             try {
                 const response = await ai.models.generateContent({ model: modelName, contents: prompt });
                 const rawText = response.text || '';
-                const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-                jsonResult = JSON.parse(cleanJson);
+                jsonResult = parseJsonFromAi(rawText);
                 if (jsonResult && jsonResult.formattedText) break;
             } catch (err) {}
         }
