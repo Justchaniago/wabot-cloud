@@ -1456,3 +1456,14 @@ async function main() {
 main().catch(err => {
     console.error('[FATAL] Failed to launch Telegram Bots:', err);
 });
+
+// Robust Stabilitas: Penangkap Error Global agar Bot Kebal dari Crash Akibat Gangguan Jaringan Google/Telegram
+process.on('uncaughtException', (err) => {
+    console.error('🔥 [UNCAUGHT_EXCEPTION] Mencegah crash fatal:', err.message || err);
+    if (err.stack) console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥 [UNHANDLED_REJECTION] Mencegah crash dari promise yang tidak ditangani:', reason);
+});
+
