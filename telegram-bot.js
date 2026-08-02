@@ -309,12 +309,10 @@ Selamat datang! Gunakan bot ini untuk menginput data operasional ke Google Sheet
 • \`/status\` - Cek status bot & server
 
 💡 *Contoh Format Input Produksi:*
-\`\`\`
 /produksi
 1.8.26
 bt lokal 250
 gt 100
-\`\`\`
         `.trim();
         await ctx.replyWithMarkdownV2(escapeMarkdown(welcomeText));
     });
@@ -643,13 +641,6 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 
         return await processProduksiLogic(ctx, inputText);
     });
-
-    // 5. /waste
-    bot.command('waste', async (ctx) => {
-        const fullText = ctx.message.text || '';
-        const lines = fullText.split('\n');
-        lines.shift();
-        const inputText = lines.join('\n').trim();
 
     async function processWasteLogic(ctx, inputText) {
         if (!ai) {
@@ -1239,7 +1230,7 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
                     exampleText = 'gong cha y16 cups 10\nfresh milk diamond 5';
                 }
 
-                return await ctx.reply(`📝 *LANGKAH 2 DARI 2: INPUT DATA ${title}*\n----------------------------------------\n📅 *Tanggal:* \`${text.trim()}\`\n\nSilakan masukkan **Daftar Nama Item & Jumlah**.\n\n💡 *Contoh Format Kirim:*\n\`\`\`\n${exampleText}\n\`\`\``, { parse_mode: 'Markdown' });
+                return await ctx.reply(`📝 *LANGKAH 2 DARI 2: INPUT DATA ${title}*\n----------------------------------------\n📅 *Tanggal:* \`${text.trim()}\`\n\nSilakan masukkan **Daftar Nama Item & Jumlah**.\n\n💡 *Contoh Format Kirim:*\n${exampleText}`, { parse_mode: 'Markdown' });
 
             } else {
                 // Step 2 done: Received items data, combine date + items and execute command
