@@ -792,7 +792,7 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 
         if (!inputText) {
             userPendingCommand.set(ctx.from.id, { command: 'produksi', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL PRODUKSI*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Produksi**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL PRODUKSI*\n----------------------------------------\nSilakan **balas (REPLY) pesan ini** dengan memasukkan **Tanggal Laporan Produksi**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
         return await processProduksiLogic(ctx, inputText);
@@ -977,7 +977,7 @@ ${JSON.stringify(validProductNamesList, null, 2)}
 
         if (!inputText) {
             userPendingCommand.set(ctx.from.id, { command: 'waste', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL WASTE*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Waste (Dibuang)**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL WASTE*\n----------------------------------------\nSilakan **balas (REPLY) pesan ini** dengan memasukkan **Tanggal Laporan Waste**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
         return await processWasteLogic(ctx, inputText);
@@ -1175,7 +1175,7 @@ Aturan Penting Pencocokan:
 
         if (!inputText) {
             userPendingCommand.set(ctx.from.id, { command: 'dailyso', step: 'date', timestamp: Date.now() });
-            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL DAILY SO*\n----------------------------------------\nSilakan masukkan **Tanggal Laporan Daily Stock Opname**.\n\n💡 *Contoh Kirim:* \`30.7.26\` atau \`30/07/2026\``, { parse_mode: 'Markdown' });
+            return await ctx.reply(`📅 *LANGKAH 1 DARI 2: INPUT TANGGAL DAILY STOCK OPNAME*\n----------------------------------------\nSilakan **balas (REPLY) pesan ini** dengan memasukkan **Tanggal Laporan Daily Stock Opname**.\n\n💡 *Contoh Kirim:* \`2.8.26\` atau \`02/08/2026\``, { parse_mode: 'Markdown' });
         }
 
         return await processDailysoLogic(ctx, inputText);
@@ -1458,7 +1458,7 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
                     exampleText = 'gong cha y16 cups 10\nfresh milk diamond 5';
                 }
 
-                return await ctx.reply(`📝 *LANGKAH 2 DARI 2: INPUT DATA ${title}*\n----------------------------------------\n📅 *Tanggal:* \`${text.trim()}\`\n\nSilakan masukkan **Daftar Nama Item & Jumlah**.\n\n💡 *Contoh Format Kirim:*\n${exampleText}`, { parse_mode: 'Markdown' });
+                return await ctx.reply(`📝 *LANGKAH 2 DARI 2: INPUT DATA ${title}*\n----------------------------------------\n📅 *Tanggal:* \`${text.trim()}\`\n\nSilakan **balas (REPLY) pesan ini** dengan memasukkan **Daftar Nama Item & Jumlah**.\n\n💡 *Contoh Format Kirim:*\n${exampleText}`, { parse_mode: 'Markdown' });
 
             } else {
                 // Step 2 done: Received items data, combine date + items and execute command
