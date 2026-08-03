@@ -1432,6 +1432,10 @@ Buka GCP Billing Console: https://console.cloud.google.com/billing
         if (text.startsWith('/')) return next();
 
         const userId = ctx.from.id;
+        const userName = ctx.from.username || ctx.from.first_name || 'Unknown';
+        const chatType = ctx.chat.type;
+
+        console.log(`[TEXT_RECEIVE] From: @${userName} (${userId}) in ${chatType}. Text: "${text}". HasPending: ${userPendingCommand.has(userId)}`);
 
         // Check if user has a pending command session (e.g. /produksi, /waste, /dailyso without payload)
         if (userPendingCommand.has(userId)) {
