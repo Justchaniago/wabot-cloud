@@ -322,6 +322,26 @@ function fuzzyMatchLokal(typedInput, daftarResmi) {
         if (fmMatch) return fmMatch;
     }
 
+    // Custom exact mappings for cup types, lids, and packaging ingredients
+    const exactMappings = {
+        'cupm': ['medium'],
+        'cupl': ['large'],
+        'cups': ['small'],
+        'cuph': ['paper cup'],
+        'domlid': ['raised cover'],
+        'hotlid': ['paper cup lid', 'cup lid'],
+        'millac': ['millac'],
+        'freshmilk': ['fresh milk']
+    };
+    if (exactMappings[inputClean]) {
+        const keywords = exactMappings[inputClean];
+        const match = daftarResmi.find(resmi => {
+            const rLower = resmi.toLowerCase();
+            return keywords.every(kw => rLower.includes(kw));
+        });
+        if (match) return match;
+    }
+
     // Direct tea and ingredient shorthand matching
     const shorthands = {
         'bt': ['black', 'tea'],
