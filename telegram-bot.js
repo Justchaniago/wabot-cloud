@@ -143,7 +143,7 @@ const BRANCHES = {
     TP: {
         code: 'TP',
         name: 'Cabang TP (GC-TP6)',
-        token: process.env.TELEGRAM_TOKEN_TP || '8797074812:AAFKn_1KdBb0XwH0SzXDM_XcFh3JGnjnpUk',
+        token: process.env.TELEGRAM_TOKEN_TP || 'MISSING_TOKEN_TP',
         spreadsheets: {
             produksi: '1673K8akr2mXuTEPLPPnL9X5TiA4GEVDi1hbgMLThvo4',
             waste: '1673K8akr2mXuTEPLPPnL9X5TiA4GEVDi1hbgMLThvo4',
@@ -182,7 +182,7 @@ Thank you and Cheer up team!
     PM: {
         code: 'PM',
         name: 'Cabang PM/PMS (GC-PMS)',
-        token: process.env.TELEGRAM_TOKEN_PM || '8999763453:AAELmaxlgaENqwOcCqca_Rziu_oKVLGj334',
+        token: process.env.TELEGRAM_TOKEN_PM || 'MISSING_TOKEN_PM',
         spreadsheets: {
             produksi: '1eN2n1esCQU5kgOxQRf7zlHaETCp_d92GKHjF-ZgRAHI',
             waste: '1eN2n1esCQU5kgOxQRf7zlHaETCp_d92GKHjF-ZgRAHI',
@@ -524,6 +524,10 @@ function queueUserTask(userId, taskFn) {
 
 // Initialize each Telegram bot
 function setupBot(branch) {
+    if (!branch.token || branch.token.startsWith('MISSING') || branch.token === '8797074812:AAFKn_1KdBb0XwH0SzXDM_XcFh3JGnjnpUk' || branch.token === '8999763453:AAELmaxlgaENqwOcCqca_Rziu_oKVLGj334') {
+        console.warn(`[TELEGRAM] Skipping Bot ${branch.code} initialization: Token is missing, public, or invalid.`);
+        return null;
+    }
     const bot = new Telegraf(branch.token);
     const userPendingCommand = new Map();
 
@@ -2947,6 +2951,10 @@ async function main() {
         const branch = BRANCHES[key];
         try {
             const bot = setupBot(branch);
+            if (!bot) {
+                console.warn(`[TELEGRAM] Skip starting Bot ${branch.code} due to missing/invalid token.`);
+                continue;
+            }
             bot.launch();
             activeBots.push(bot);
             branch.bot = bot; // Save bot instance for health checks
