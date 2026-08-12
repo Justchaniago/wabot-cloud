@@ -473,7 +473,25 @@ function formatUptime(seconds) {
 
 // Global Bot Instances
 const activeBots = [];
-const activeUserLocks = new Set();
+const userQueues = new Map();
+
+function queueUserTask(userId, taskFn) {
+    const currentQueue = userQueues.get(userId) || Promise.resolve();
+    const nextQueue = currentQueue.then(async () => {
+        try {
+            await taskFn();
+        } catch (err) {
+            console.error(`[QUEUE_ERROR] Error running task for user ${userId}:`, err);
+        }
+    });
+    userQueues.set(userId, nextQueue);
+    nextQueue.finally(() => {
+        if (userQueues.get(userId) === nextQueue) {
+            userQueues.delete(userId);
+        }
+    });
+    return nextQueue;
+}
 
 // Initialize each Telegram bot
 function setupBot(branch) {
@@ -491,20 +509,20 @@ function setupBot(branch) {
         return next();
     });
 
-    // --- LOCK MIDDLEWARE TO PREVENT CONCURRENT DUPLICATE ACTIONS PER USER ---
+    // --- QUEUE MIDDLEWARE TO SERIALIZE INCOMING UPDATES PER USER ---
     bot.use(async (ctx, next) => {
         const userId = ctx.from?.id;
         if (!userId) return next();
 
-        if (activeUserLocks.has(userId)) {
-            if (ctx.callbackQuery) {
+        return new Promise((resolve) => {
+            queueUserTask(userId, async () => {
                 try {
-                    return await ctx.answerCbQuery('⚠️ Mohon tunggu, proses sebelumnya masih berjalan...', { show_alert: true });
-                } catch (e) { return; }
-            }
-            return await ctx.reply('⚠️ Mohon tunggu sebentar, proses sebelumnya belum selesai.');
-        }
-        return next();
+                    await next();
+                } finally {
+                    resolve();
+                }
+            });
+        });
     });
 
     // --- INTERSEPTOR GLOBAL ANTI-EMOTICON & ANTI-EMOJI + NATURAL HUMAN REWRITER ---
@@ -636,8 +654,6 @@ Waktu Server: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
 
     // 3. /testsheet
     bot.command('testsheet', async (ctx) => {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
         await ctx.reply(`Testing Google Sheets API connection for ${branch.name}...`);
         try {
             const sheets = await getSheetsClient();
@@ -660,20 +676,15 @@ Waktu Server: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             console.error(`[TEST_SHEETS_${branch.code}] Error:`, err);
             handleSheetsError(err);
             await ctx.reply(`Gagal Koneksi Google Sheets: ${err.message}`);
-        } finally {
-            if (userId) activeUserLocks.delete(userId);
         }
     });
 
     // 4. /checkprodwaste
     bot.command('checkprodwaste', async (ctx) => {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
         const calendarDate = getJakartaCalendarDate();
         const days = getDaysToCheck(calendarDate.day);
 
         if (days.length === 0) {
-            if (userId) activeUserLocks.delete(userId);
             return await ctx.reply('Belum ada tanggal sebelum hari ini untuk diperiksa pada bulan ini.');
         }
 
@@ -745,20 +756,15 @@ Waktu Server: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             console.error(`[CHECK_PROD_WASTE_${branch.code}] Error:`, err);
             handleSheetsError(err);
             await ctx.reply(`Gagal mengecek Produksi/Waste: ${err.message}`);
-        } finally {
-            if (userId) activeUserLocks.delete(userId);
         }
     });
 
     // 5. /checkdailyso
     bot.command('checkdailyso', async (ctx) => {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
         const calendarDate = getJakartaCalendarDate();
         const days = getDaysToCheck(calendarDate.day);
 
         if (days.length === 0) {
-            if (userId) activeUserLocks.delete(userId);
             return await ctx.reply('Belum ada tanggal sebelum hari ini untuk diperiksa pada bulan ini.');
         }
 
@@ -775,7 +781,6 @@ Waktu Server: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             const defaultTab = sheetTitles[0];
 
             if (!defaultTab) {
-                if (userId) activeUserLocks.delete(userId);
                 return await ctx.reply(`Tidak menemukan tab pada spreadsheet Daily SO ${branch.name}.`);
             }
 
@@ -820,94 +825,89 @@ Waktu Server: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             console.error(`[CHECK_DAILYSO_${branch.code}] Error:`, err);
             handleSheetsError(err);
             await ctx.reply(`Gagal mengecek Daily SO: ${err.message}`);
-        } finally {
-            if (userId) activeUserLocks.delete(userId);
         }
     });
 
     async function processProduksiLogic(ctx, inputText) {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
+        if (!ai) {
+            return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+        }
+
+        const senderName = ctx.from.first_name || ctx.from.username || 'User';
+
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
+        const dateRaw = inputLines.shift();
+        const dateParts = dateRaw.split(/[./-]/);
+        if (dateParts.length < 3) {
+            return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `1.8.26`', { parse_mode: 'Markdown' });
+        }
+        const day = parseInt(dateParts[0], 10);
+        const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+
         try {
-            if (!ai) {
-                return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+            const sheets = await getSheetsClient();
+            const spreadsheetId = branch.spreadsheets.produksi;
+            const tabName = await findTabName(sheets, spreadsheetId, day, year);
+
+            await ctx.reply(`⏳ Menghubungkan ke Spreadsheet *${branch.name}*, Tab: *"${tabName}"*...`, { parse_mode: 'Markdown' });
+
+            const readRes = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range: `'${tabName}'!B1:D120`
+            });
+
+            const rows = readRes.data.values || [];
+            if (rows.length === 0) {
+                return await ctx.reply(`❌ Gagal membaca data dari tab "${tabName}".`);
             }
 
-            const senderName = ctx.from.first_name || ctx.from.username || 'User';
+            const productionProducts = [];
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                const prodName = String(row[0] || '').trim();
+                const existingQty = String(row[2] || '').trim();
 
-            const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
-            const dateRaw = inputLines.shift();
-            const dateParts = dateRaw.split(/[./-]/);
-            if (dateParts.length < 3) {
-                return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `1.8.26`', { parse_mode: 'Markdown' });
+                if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
+                    productionProducts.push({
+                        name: prodName,
+                        rowIndex: i + 1,
+                        existingQty: (existingQty && existingQty !== '0' && existingQty !== '') ? existingQty : null
+                    });
+                }
             }
-            const day = parseInt(dateParts[0], 10);
-            const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
 
-            try {
-                const sheets = await getSheetsClient();
-                const spreadsheetId = branch.spreadsheets.produksi;
-                const tabName = await findTabName(sheets, spreadsheetId, day, year);
+            const validProductNamesList = productionProducts.map(p => p.name);
 
-                await ctx.reply(`⏳ Menghubungkan ke Spreadsheet *${branch.name}*, Tab: *"${tabName}"*...`, { parse_mode: 'Markdown' });
+            // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
+            let preParsedSuccess = true;
+            const preParsedItems = [];
 
-                const readRes = await sheets.spreadsheets.values.get({
-                    spreadsheetId,
-                    range: `'${tabName}'!B1:D120`
-                });
+            for (const line of inputLines) {
+                const parts = line.trim().split(/\s+/);
+                const quantityStr = parts.pop();
+                const quantity = parseFloat(quantityStr.replace(',', '.'));
+                const typedName = parts.join(' ').trim();
 
-                const rows = readRes.data.values || [];
-                if (rows.length === 0) {
-                    return await ctx.reply(`❌ Gagal membaca data dari tab "${tabName}".`);
-                }
-
-                const productionProducts = [];
-                for (let i = 0; i < rows.length; i++) {
-                    const row = rows[i];
-                    const prodName = String(row[0] || '').trim();
-                    const existingQty = String(row[2] || '').trim();
-
-                    if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
-                        productionProducts.push({
-                            name: prodName,
-                            rowIndex: i + 1,
-                            existingQty: (existingQty && existingQty !== '0' && existingQty !== '') ? existingQty : null
-                        });
-                    }
-                }
-
-                const validProductNamesList = productionProducts.map(p => p.name);
-
-                // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
-                let preParsedSuccess = true;
-                const preParsedItems = [];
-
-                for (const line of inputLines) {
-                    const parts = line.trim().split(/\s+/);
-                    const quantityStr = parts.pop();
-                    const quantity = parseFloat(quantityStr.replace(',', '.'));
-                    const typedName = parts.join(' ').trim();
-
-                    if (!isNaN(quantity) && typedName) {
-                        const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
-                        if (matchedName) {
-                            preParsedItems.push({ typed: typedName, matchedName, quantity });
-                        } else {
-                            preParsedSuccess = false;
-                            break;
-                        }
+                if (!isNaN(quantity) && typedName) {
+                    const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
+                    if (matchedName) {
+                        preParsedItems.push({ typed: typedName, matchedName, quantity });
                     } else {
                         preParsedSuccess = false;
                         break;
                     }
-                }
-
-                let aiResult = null;
-                if (preParsedSuccess && preParsedItems.length > 0) {
-                    aiResult = { items: preParsedItems };
-                    console.log(`[PRE-PARSER] Sukses bypass AI untuk Produksi ${branch.code}. Hemat Token!`);
                 } else {
-                    const prompt = `
+                    preParsedSuccess = false;
+                    break;
+                }
+            }
+
+            let aiResult = null;
+            if (preParsedSuccess && preParsedItems.length > 0) {
+                aiResult = { items: preParsedItems };
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk Produksi ${branch.code}. Hemat Token!`);
+            } else {
+                const prompt = `
 SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN.
 Anda adalah AI parser laporan produksi toko minuman.
 Tugas Anda:
@@ -927,102 +927,96 @@ Aturan Penting Alias Shorthand:
     { "typed": "nama_input", "matchedName": "NAMA_RESMI", "quantity": angka }
   ]
 }
-                    `.trim();
+                `.trim();
 
-                    for (const modelName of getModelsForUser(ctx.from.id)) {
-                        try {
-                            const response = await generateContentWithTimeout(modelName, prompt);
-                            aiResult = parseJsonFromAi(response.text || '');
-                            if (aiResult && Array.isArray(aiResult.items)) {
-                                trackTokenUsage(ctx.from.id, 'produksi_ai', response.usageMetadata);
-                                break;
-                            }
-                        } catch (e) {
-                            console.warn(`[GEMINI_${modelName}] Failed:`, e.message);
+                for (const modelName of getModelsForUser(ctx.from.id)) {
+                    try {
+                        const response = await generateContentWithTimeout(modelName, prompt);
+                        aiResult = parseJsonFromAi(response.text || '');
+                        if (aiResult && Array.isArray(aiResult.items)) {
+                            trackTokenUsage(ctx.from.id, 'produksi_ai', response.usageMetadata);
+                            break;
                         }
+                    } catch (e) {
+                        console.warn(`[GEMINI_${modelName}] Failed:`, e.message);
                     }
                 }
+            }
 
-                if (!aiResult || !Array.isArray(aiResult.items) || aiResult.items.length === 0) {
-                    return await ctx.reply('❌ Gagal memparsing input produksi dengan AI.');
-                }
+            if (!aiResult || !Array.isArray(aiResult.items) || aiResult.items.length === 0) {
+                return await ctx.reply('❌ Gagal memparsing input produksi dengan AI.');
+            }
 
-                const itemsWithConflict = [];
-                aiResult.items.forEach(item => {
-                    if (item.matchedName) {
-                        const matchedProd = productionProducts.find(p => isSameProduct(p.name, item.matchedName));
-                        if (matchedProd && matchedProd.existingQty !== null) {
-                            itemsWithConflict.push({
-                                name: item.matchedName,
-                                existing: matchedProd.existingQty,
-                                newVal: item.quantity
-                            });
-                        }
+            const itemsWithConflict = [];
+            aiResult.items.forEach(item => {
+                if (item.matchedName) {
+                    const matchedProd = productionProducts.find(p => isSameProduct(p.name, item.matchedName));
+                    if (matchedProd && matchedProd.existingQty !== null) {
+                        itemsWithConflict.push({
+                            name: item.matchedName,
+                            existing: matchedProd.existingQty,
+                            newVal: item.quantity
+                        });
                     }
+                }
+            });
+
+            if (itemsWithConflict.length > 0) {
+                const pendingId = `pending_${Date.now()}_${ctx.from.id}`;
+                await db.collection('pending_inputs').doc(pendingId).set({
+                    type: 'produksi',
+                    tabName,
+                    dateRaw,
+                    items: aiResult.items,
+                    productionProducts,
+                    spreadsheetId,
+                    userNickname: senderName,
+                    createdAt: new Date().toISOString()
                 });
 
-                if (itemsWithConflict.length > 0) {
-                    const pendingId = `pending_${Date.now()}_${ctx.from.id}`;
-                    await db.collection('pending_inputs').doc(pendingId).set({
-                        type: 'produksi',
-                        tabName,
-                        dateRaw,
-                        items: aiResult.items,
-                        productionProducts,
-                        spreadsheetId,
-                        userNickname: senderName,
-                        createdAt: new Date().toISOString()
-                    });
+                let conflictText = `⚠️ *DATA PRODUKSI TANGGAL ${dateRaw} SUDAH TERISI!*\n`;
+                conflictText += `----------------------------------------\n`;
+                conflictText += `*Data Lama di Spreadsheet (${branch.code}):*\n`;
+                itemsWithConflict.forEach(c => {
+                    conflictText += `- *${c.name}*: ${c.existing} ➔ *${c.newVal}*\n`;
+                });
+                conflictText += `\n📥 *DATA BARU YANG INGIN DIINPUT:*\n`;
+                aiResult.items.forEach(item => {
+                    if (item.matchedName) conflictText += `- *${item.matchedName}*: ${item.quantity}\n`;
+                    else conflictText += `- _${item.typed}_ (Tidak dikenal): ${item.quantity}\n`;
+                });
+                conflictText += `----------------------------------------\n`;
+                conflictText += `Apakah Anda yakin ingin menimpa data lama?`;
 
-                    let conflictText = `⚠️ *DATA PRODUKSI TANGGAL ${dateRaw} SUDAH TERISI!*\n`;
-                    conflictText += `----------------------------------------\n`;
-                    conflictText += `*Data Lama di Spreadsheet (${branch.code}):*\n`;
-                    itemsWithConflict.forEach(c => {
-                        conflictText += `- *${c.name}*: ${c.existing} ➔ *${c.newVal}*\n`;
-                    });
-                    conflictText += `\n📥 *DATA BARU YANG INGIN DIINPUT:*\n`;
-                    aiResult.items.forEach(item => {
-                        if (item.matchedName) conflictText += `- *${item.matchedName}*: ${item.quantity}\n`;
-                        else conflictText += `- _${item.typed}_ (Tidak dikenal): ${item.quantity}\n`;
-                    });
-                    conflictText += `----------------------------------------\n`;
-                    conflictText += `Apakah Anda yakin ingin menimpa data lama?`;
-
-                    return await ctx.reply(conflictText, {
-                        parse_mode: 'Markdown',
-                        ...Markup.inlineKeyboard([
-                            [
-                                Markup.button.callback('🔄 Ya, Ganti Data', `overwrite_yes:${pendingId}`),
-                                Markup.button.callback('❌ Batal', `overwrite_no:${pendingId}`)
-                            ]
-                        ])
-                    });
-                }
-
-                await writeProduksiItems(sheets, spreadsheetId, tabName, aiResult.items, productionProducts, senderName, branch.code, ctx);
-
-            } catch (err) {
-                console.error(`[PRODUKSI_${branch.code}] Error:`, err);
-                handleSheetsError(err);
-                await ctx.reply(`❌ Terjadi kesalahan fatal: ${err.message}`);
+                return await ctx.reply(conflictText, {
+                    parse_mode: 'Markdown',
+                    ...Markup.inlineKeyboard([
+                        [
+                            Markup.button.callback('🔄 Ya, Ganti Data', `overwrite_yes:${pendingId}`),
+                            Markup.button.callback('❌ Batal', `overwrite_no:${pendingId}`)
+                        ]
+                    ])
+                });
             }
-        } finally {
-            if (userId) activeUserLocks.delete(userId);
+
+            await writeProduksiItems(sheets, spreadsheetId, tabName, aiResult.items, productionProducts, senderName, branch.code, ctx);
+
+        } catch (err) {
+            console.error(`[PRODUKSI_${branch.code}] Error:`, err);
+            handleSheetsError(err);
+            await ctx.reply(`❌ Terjadi kesalahan fatal: ${err.message}`);
         }
     }
 
     const pendingDrafts = new Map();
 
     async function prepareDraftAndConfirm(ctx, commandType, inputText) {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
-        try {
-            if (!ai) {
-                return await ctx.reply('Gemini API key belum dikonfigurasi.');
-            }
+        if (!ai) {
+            return await ctx.reply('Gemini API key belum dikonfigurasi.');
+        }
 
-            const senderName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || 'User');
-            const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
+        const senderName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || 'User');
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
 
         if (inputLines.length === 0) {
             let cmdTitle = 'Produksi';
@@ -1050,36 +1044,23 @@ Aturan Penting Alias Shorthand:
         const dateRaw = inputLines.shift();
         const dateParts = dateRaw.split(/[./-]/);
         if (dateParts.length < 3) {
-            return await ctx.reply('Format tanggal tidak valid pada baris pertama. Gunakan format seperti 3.8.26');
+            return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `1.8.26`', { parse_mode: 'Markdown' });
         }
 
         const day = parseInt(dateParts[0], 10);
-        const month = parseInt(dateParts[1], 10);
         const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
-
-        let spreadsheetId = '';
-        if (commandType === 'produksi') spreadsheetId = branch.spreadsheets.produksi;
-        else if (commandType === 'waste') spreadsheetId = branch.spreadsheets.waste;
-        else if (commandType === 'dailyso') spreadsheetId = branch.spreadsheets.dailyso;
-
-        await ctx.sendChatAction('typing');
 
         try {
             const sheets = await getSheetsClient();
             let tabName = '';
             if (commandType !== 'dailyso') {
+                const spreadsheetId = commandType === 'produksi' ? branch.spreadsheets.produksi : branch.spreadsheets.waste;
                 tabName = await findTabName(sheets, spreadsheetId, day, year);
-            }
-            let validProductNamesList = [];
-
-            if (commandType === 'dailyso') {
-                const metaRes = await sheets.spreadsheets.get({
-                    spreadsheetId,
-                    fields: 'sheets.properties.title'
-                });
-                const sheetTitles = (metaRes.data.sheets || []).map(s => s.properties.title);
-                const defaultTab = sheetTitles[0];
-
+            } else {
+                const spreadsheetId = branch.spreadsheets.dailyso;
+                const metaRes = await sheets.spreadsheets.get({ spreadsheetId });
+                const sheetTitles = (metaRes.data.sheets || []).map(sheet => sheet.properties.title);
+                const month = parseInt(dateParts[1], 10);
                 const monthStr = String(month);
                 const monthPad = monthStr.padStart(2, '0');
                 const yrShort = year.toString().slice(-2);
@@ -1089,37 +1070,59 @@ Aturan Penting Alias Shorthand:
                     `${monthStr} - ${yrShort}`,
                     `${monthPad} - ${yrShort}`
                 ];
-                const targetTab = sheetTitles.find(t => candidates.includes(t)) || defaultTab;
-
-                const readRes = await sheets.spreadsheets.values.get({
-                    spreadsheetId,
-                    range: `'${targetTab}'!B1:C150`
-                });
-                const rows = readRes.data.values || [];
-                validProductNamesList = rows.map(r => String(r[0] || '').trim()).filter(n => n && !n.startsWith('---') && !n.includes('NAMA ITEM'));
-            } else {
-                const readRes = await sheets.spreadsheets.values.get({
-                    spreadsheetId,
-                    range: `'${tabName}'!B1:D120`
-                });
-                const rows = readRes.data.values || [];
-                for (let i = 0; i < rows.length; i++) {
-                    const row = rows[i];
-                    const prodName = String(row[0] || '').trim();
-                    if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
-                        validProductNamesList.push(prodName);
-                    }
-                }
+                tabName = sheetTitles.find(t => candidates.includes(t)) || sheetTitles[0];
             }
 
-            // Run Hybrid Pre-Parser / Gemini AI
+            await ctx.reply(`⏳ Sedang menganalisis laporan dengan Gemini AI...`);
+
+            // Read valid products for validation
+            let validProductNamesList = [];
+            if (commandType === 'produksi') {
+                const readRes = await sheets.spreadsheets.values.get({
+                    spreadsheetId: branch.spreadsheets.produksi,
+                    range: `'${tabName}'!B1:B120`
+                });
+                const rows = readRes.data.values || [];
+                rows.forEach(row => {
+                    const name = String(row[0] || '').trim();
+                    if (name && !name.startsWith('---') && !name.includes('NAMA PRODUK') && !name.includes('KODE')) {
+                        validProductNamesList.push(name);
+                    }
+                });
+            } else if (commandType === 'waste') {
+                const readRes = await sheets.spreadsheets.values.get({
+                    spreadsheetId: branch.spreadsheets.waste,
+                    range: `'${tabName}'!B1:B150`
+                });
+                const rows = readRes.data.values || [];
+                rows.forEach(row => {
+                    const name = String(row[0] || '').trim();
+                    if (name && !name.startsWith('---') && !name.includes('NAMA PRODUK') && !name.includes('KODE')) {
+                        validProductNamesList.push(name);
+                    }
+                });
+            } else if (commandType === 'dailyso') {
+                const readRes = await sheets.spreadsheets.values.get({
+                    spreadsheetId: branch.spreadsheets.dailyso,
+                    range: `'${tabName}'!B1:B150`
+                });
+                const rows = readRes.data.values || [];
+                rows.forEach(row => {
+                    const name = String(row[0] || '').trim();
+                    if (name && !name.startsWith('---') && !name.includes('NAMA BARANG') && !name.includes('KODE')) {
+                        validProductNamesList.push(name);
+                    }
+                });
+            }
+
+            // --- LOKAL HYBRID PRE-PARSER ---
             let preParsedSuccess = true;
             const preParsedItems = [];
 
             for (const line of inputLines) {
                 const parts = line.trim().split(/\s+/);
                 const quantityStr = parts.pop();
-                const quantity = parseInt(quantityStr, 10);
+                const quantity = parseFloat(quantityStr.replace(',', '.'));
                 const typedName = parts.join(' ').trim();
 
                 if (!isNaN(quantity) && typedName) {
@@ -1139,12 +1142,13 @@ Aturan Penting Alias Shorthand:
             let aiResult = null;
             if (preParsedSuccess && preParsedItems.length > 0) {
                 aiResult = { items: preParsedItems };
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk ${commandType} ${branch.code}. Hemat Token!`);
             } else {
-                const prompt = `
+                const systemPrompt = `
 SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN.
 Anda adalah AI parser laporan operasional toko minuman.
 Tugas Anda:
-1. Analisis input:
+1. Analisis input data:
 """
 ${inputLines.join('\n')}
 """
@@ -1162,11 +1166,14 @@ Aturan Penting Alias Shorthand:
 }
                 `.trim();
 
-                for (const modelName of CANDIDATE_MODELS) {
+                for (const modelName of getModelsForUser(ctx.from.id)) {
                     try {
-                        const response = await generateContentWithTimeout(modelName, prompt);
+                        const response = await generateContentWithTimeout(modelName, systemPrompt);
                         aiResult = parseJsonFromAi(response.text || '');
-                        if (aiResult && Array.isArray(aiResult.items)) break;
+                        if (aiResult && Array.isArray(aiResult.items)) {
+                            trackTokenUsage(ctx.from.id, `${commandType}_ai`, response.usageMetadata);
+                            break;
+                        }
                     } catch (e) {
                         console.warn(`[GEMINI_${modelName}] Failed:`, e.message);
                     }
@@ -1174,19 +1181,17 @@ Aturan Penting Alias Shorthand:
             }
 
             if (!aiResult || !Array.isArray(aiResult.items) || aiResult.items.length === 0) {
-                return await ctx.reply('Data item tidak dapat dibaca. Pastikan memasukkan nama item dan jumlah dengan jelas.');
+                return await ctx.reply('❌ Gagal menganalisis data dengan AI.');
             }
 
-            // Save draft ID
+            // Save draft
             const draftId = `draft_${Date.now()}_${ctx.from.id}`;
             pendingDrafts.set(draftId, {
                 commandType,
                 dateRaw,
-                inputLines,
                 rawInput: inputText,
-                senderName,
-                userId: ctx.from.id,
-                items: aiResult.items,
+                aiResult,
+                senderId: ctx.from.id,
                 createdAt: Date.now()
             });
 
@@ -1230,10 +1235,7 @@ Periksa kembali rincian data di atas sebelum disimpan.`;
             console.error('[PREPARE_DRAFT_ERR]', err);
             return await ctx.reply(`Terjadi kesalahan saat memeriksa data: ${err.message}`);
         }
-    } finally {
-        if (userId) activeUserLocks.delete(userId);
     }
-}
 
     // 6. /produksi
     bot.command('produksi', async (ctx) => {
@@ -1246,25 +1248,22 @@ Periksa kembali rincian data di atas sebelum disimpan.`;
     });
 
     async function processWasteLogic(ctx, inputText) {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
+        if (!ai) {
+            return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+        }
+
+        const senderName = ctx.from.first_name || ctx.from.username || 'User';
+
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
+        const dateRaw = inputLines.shift();
+        const dateParts = dateRaw.split(/[./-]/);
+        if (dateParts.length < 3) {
+            return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `1.8.26`', { parse_mode: 'Markdown' });
+        }
+        const day = parseInt(dateParts[0], 10);
+        const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+
         try {
-            if (!ai) {
-                return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
-            }
-
-            const senderName = ctx.from.first_name || ctx.from.username || 'User';
-
-            const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
-            const dateRaw = inputLines.shift();
-            const dateParts = dateRaw.split(/[./-]/);
-            if (dateParts.length < 3) {
-                return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `1.8.26`', { parse_mode: 'Markdown' });
-            }
-            const day = parseInt(dateParts[0], 10);
-            const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
-
-            try {
             const sheets = await getSheetsClient();
             const spreadsheetId = branch.spreadsheets.waste;
             const tabName = await findTabName(sheets, spreadsheetId, day, year);
@@ -1273,58 +1272,42 @@ Periksa kembali rincian data di atas sebelum disimpan.`;
 
             const readRes = await sheets.spreadsheets.values.get({
                 spreadsheetId,
-                range: `'${tabName}'!B1:D120`
+                range: `'${tabName}'!B1:D150`
             });
 
-            const rowsBtoD = readRes.data.values || [];
-            if (rowsBtoD.length === 0) {
-                return await ctx.reply(`❌ Gagal membaca produk dari tab "${tabName}".`);
-            }
-
-            let wasteStartIdx = -1;
-            rowsBtoD.forEach((row, idx) => {
-                const cellVal = String(row[0] || '').trim().toUpperCase();
-                if (cellVal === 'WASTE') wasteStartIdx = idx;
-            });
-
-            if (wasteStartIdx === -1) {
-                return await ctx.reply(`❌ Header "WASTE" tidak ditemukan di kolom B pada tab "${tabName}".`);
+            const rows = readRes.data.values || [];
+            if (rows.length === 0) {
+                return await ctx.reply(`❌ Gagal membaca data dari tab "${tabName}".`);
             }
 
             const wasteProducts = [];
-            for (let i = wasteStartIdx + 1; i < rowsBtoD.length; i++) {
-                const prodName = String(rowsBtoD[i]?.[0] || '').trim();
-                const existingQty = String(rowsBtoD[i]?.[2] || '').trim();
-
-                if (prodName && !prodName.startsWith('---') && !prodName.includes('KODE')) {
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                const prodName = String(row[0] || '').trim();
+                if (prodName && !prodName.startsWith('---') && !prodName.includes('NAMA PRODUK') && !prodName.includes('KODE')) {
                     wasteProducts.push({
                         name: prodName,
-                        rowIndex: i + 1,
-                        existingQty: (existingQty && existingQty !== '0' && existingQty !== '') ? existingQty : null
+                        rowIndex: i + 1
                     });
                 }
             }
 
             const validProductNamesList = wasteProducts.map(p => p.name);
 
-            // --- LOKAL HYBRID PRE-PARSER (COST-OPTIMIZED SAVER) ---
+            // --- LOKAL HYBRID PRE-PARSER ---
             let preParsedSuccess = true;
             const preParsedItems = [];
 
             for (const line of inputLines) {
                 const parts = line.trim().split(/\s+/);
                 const quantityStr = parts.pop();
-                const quantity = parseInt(quantityStr, 10);
+                const quantity = parseFloat(quantityStr.replace(',', '.'));
                 const typedName = parts.join(' ').trim();
 
                 if (!isNaN(quantity) && typedName) {
                     const matchedName = fuzzyMatchLokal(typedName, validProductNamesList);
                     if (matchedName) {
-                        preParsedItems.push({
-                            typed: typedName,
-                            matchedName: matchedName,
-                            quantity: quantity
-                        });
+                        preParsedItems.push({ typed: typedName, matchedName, quantity });
                     } else {
                         preParsedSuccess = false;
                         break;
@@ -1337,22 +1320,22 @@ Periksa kembali rincian data di atas sebelum disimpan.`;
 
             let aiResult = null;
             if (preParsedSuccess && preParsedItems.length > 0) {
-                console.log(`[PRE-PARSER] Sukses bypass AI untuk Waste ${branch.code}. Hemat Token!`);
                 aiResult = { items: preParsedItems };
+                console.log(`[PRE-PARSER] Sukses bypass AI untuk Waste ${branch.code}. Hemat Token!`);
             } else {
-                console.log(`[PRE-PARSER] Ada item tidak dikenal atau format bebas di Waste. Memanggil Gemini AI...`);
                 const prompt = `
+SANGAT PENTING: RESPON HANYA DALAM FORMAT JSON VALID. DILARANG MENAMBAHKAN TEKS PENJELASAN.
 Anda adalah AI parser laporan waste toko minuman.
 Tugas Anda:
 1. Analisis input:
 """
 ${inputLines.join('\n')}
 """
-2. Cocokkan nama item yang diketik staff ke daftar nama produk RESMI yang ada di spreadsheet:
+2. Cocokkan nama item yang diketik staff ke daftar nama produk RESMI:
 ${JSON.stringify(validProductNamesList, null, 2)}
 
 Aturan Penting Alias Shorthand:
-- "freshmilk", "fresh milk", "fm", "susu", "diamond", "plain diamond" WAJIB dicocokkan ke nama produk resmi "FRESH MILK -  PLAIN DIAMOND 946ML" (atau produk resmi yang mengandung FRESH MILK / DIAMOND).
+- "freshmilk", "fresh milk", "fm", "susu", "diamond", "plain diamond" WAJIB dicocokkan ke produk resmi "FRESH MILK -  PLAIN DIAMOND 946ML" (atau produk resmi yang mengandung FRESH MILK / DIAMOND).
 
 3. JSON Output bersih:
 {
@@ -1362,20 +1345,22 @@ Aturan Penting Alias Shorthand:
 }
                 `.trim();
 
-                for (const modelName of CANDIDATE_MODELS) {
+                for (const modelName of getModelsForUser(ctx.from.id)) {
                     try {
                         const response = await generateContentWithTimeout(modelName, prompt);
-                        const rawText = response.text || '';
-                        aiResult = parseJsonFromAi(rawText);
-                        if (aiResult && Array.isArray(aiResult.items)) break;
-                    } catch (err) {
-                        console.warn(`[GEMINI_${modelName}] Failed:`, err.message);
+                        aiResult = parseJsonFromAi(response.text || '');
+                        if (aiResult && Array.isArray(aiResult.items)) {
+                            trackTokenUsage(ctx.from.id, 'waste_ai', response.usageMetadata);
+                            break;
+                        }
+                    } catch (e) {
+                        console.warn(`[GEMINI_${modelName}] Failed:`, e.message);
                     }
                 }
             }
 
-            if (!aiResult || !Array.isArray(aiResult.items)) {
-                return await ctx.reply(`❌ Gagal memparsing input waste dengan AI.`);
+            if (!aiResult || !Array.isArray(aiResult.items) || aiResult.items.length === 0) {
+                return await ctx.reply('❌ Gagal memparsing input waste dengan AI.');
             }
 
             // Direct Write Waste
@@ -1431,10 +1416,7 @@ Aturan Penting Alias Shorthand:
             handleSheetsError(err);
             await ctx.reply(`❌ Error: ${err.message}`);
         }
-    } finally {
-        if (userId) activeUserLocks.delete(userId);
     }
-}
 
     // 5. /waste
     bot.command('waste', async (ctx) => {
@@ -1447,30 +1429,27 @@ Aturan Penting Alias Shorthand:
     });
 
     async function processDailysoLogic(ctx, inputText) {
-        const userId = ctx.from?.id;
-        if (userId) activeUserLocks.add(userId);
+        if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
+
+        const senderName = ctx.from.first_name || ctx.from.username || 'User';
+
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
+        const dateRaw = inputLines.shift();
+
+        const dateParts = dateRaw.split(/[./-]/);
+        if (dateParts.length < 3) {
+            return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `30.7.26`', { parse_mode: 'Markdown' });
+        }
+        const day = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10);
+        const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+
+        const targetColIdx = 3 + day;
+        const colLetter = colIndexToLetter(targetColIdx);
+
+        await ctx.reply(`⏳ Menghubungkan ke Spreadsheet Daily SO *${branch.name}*, Kolom *${colLetter}* (Tanggal ${day})...`, { parse_mode: 'Markdown' });
+
         try {
-            if (!ai) return await ctx.reply('⚠️ GEMINI_API_KEY belum dikonfigurasi.');
-
-            const senderName = ctx.from.first_name || ctx.from.username || 'User';
-
-            const inputLines = inputText.split('\n').map(l => l.trim()).filter(Boolean);
-            const dateRaw = inputLines.shift();
-
-            const dateParts = dateRaw.split(/[./-]/);
-            if (dateParts.length < 3) {
-                return await ctx.reply('❌ Format tanggal salah. Gunakan format tanggal seperti: `30.7.26`', { parse_mode: 'Markdown' });
-            }
-            const day = parseInt(dateParts[0], 10);
-            const month = parseInt(dateParts[1], 10);
-            const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
-
-            const targetColIdx = 3 + day;
-            const colLetter = colIndexToLetter(targetColIdx);
-
-            await ctx.reply(`⏳ Menghubungkan ke Spreadsheet Daily SO *${branch.name}*, Kolom *${colLetter}* (Tanggal ${day})...`, { parse_mode: 'Markdown' });
-
-            try {
             const sheets = await getSheetsClient();
             const spreadsheetId = branch.spreadsheets.dailyso;
 
@@ -1652,10 +1631,7 @@ Aturan Penting Pencocokan Alias Shorthand:
             handleSheetsError(err);
             await ctx.reply(`❌ Error: ${err.message}`);
         }
-    } finally {
-        if (userId) activeUserLocks.delete(userId);
     }
-}
 
     // 5.5. /dailyso
     bot.command('dailyso', async (ctx) => {
