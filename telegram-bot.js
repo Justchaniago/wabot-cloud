@@ -322,15 +322,44 @@ function fuzzyMatchLokal(typedInput, daftarResmi) {
         if (fmMatch) return fmMatch;
     }
 
+    // Direct tea and ingredient shorthand matching
+    const shorthands = {
+        'bt': ['black', 'tea'],
+        'gt': ['green', 'tea'],
+        'ot': ['oolong', 'tea'],
+        'egt': ['earl', 'grey', 'tea'],
+        'egmt': ['earl', 'grey', 'milk', 'tea']
+    };
+    if (shorthands[inputClean]) {
+        const keywords = shorthands[inputClean];
+        const match = daftarResmi.find(resmi => {
+            const rLower = resmi.toLowerCase();
+            return keywords.every(kw => rLower.includes(kw));
+        });
+        if (match) return match;
+    }
+
+    // Prefix word and subset matches (e.g. "pearl" -> "PEARL BASE")
+    const matchedByWord = [];
+    for (const resmi of daftarResmi) {
+        const resmiClean = cleanString(resmi);
+        if (resmiClean === inputClean) return resmi;
+
+        if (resmiClean.startsWith(inputClean)) {
+            matchedByWord.push({ resmi, score: inputClean.length / resmiClean.length });
+        }
+    }
+
+    if (matchedByWord.length > 0) {
+        matchedByWord.sort((a, b) => b.score - a.score);
+        return matchedByWord[0].resmi;
+    }
+
     let bestMatch = null;
     let highestScore = 0;
 
     for (const resmi of daftarResmi) {
         const resmiClean = cleanString(resmi);
-        if (resmiClean === inputClean) {
-            return resmi;
-        }
-
         if (resmiClean.includes(inputClean) || inputClean.includes(resmiClean)) {
             const score = Math.min(resmiClean.length, inputClean.length) / Math.max(resmiClean.length, inputClean.length);
             if (score > highestScore) {
@@ -340,7 +369,7 @@ function fuzzyMatchLokal(typedInput, daftarResmi) {
         }
     }
 
-    if (highestScore >= 0.85) {
+    if (highestScore >= 0.70) {
         return bestMatch;
     }
     return null;
