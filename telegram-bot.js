@@ -1186,14 +1186,27 @@ Aturan Penting Alias Shorthand:
 
             // Save draft
             const draftId = `draft_${Date.now()}_${ctx.from.id}`;
-            pendingDrafts.set(draftId, {
+            const draftData = {
+                draftId,
+                branchCode: branch.code,
                 commandType,
                 dateRaw,
+                inputLines,
                 rawInput: inputText,
                 aiResult,
-                senderId: ctx.from.id,
-                createdAt: Date.now()
-            });
+                userId: ctx.from.id,
+                senderName,
+                createdAt: new Date().toISOString(),
+                status: 'pending'
+            };
+
+            try {
+                await db.collection('telegram_pending_drafts').doc(draftId).set(draftData);
+            } catch (err) {
+                console.error('[SAVE_DRAFT_FIRESTORE_ERR]', err.message);
+            }
+
+            pendingDrafts.set(draftId, draftData);
 
             // Format summary items
             let itemsSummary = '';
@@ -1959,15 +1972,30 @@ Konsol Billing GCP: https://console.cloud.google.com/billing`;
         } catch (e) {}
 
         const draftId = ctx.match[1];
-        const draft = pendingDrafts.get(draftId);
+        let draft = pendingDrafts.get(draftId);
 
         if (!draft) {
-            return await ctx.editMessageText('Sesi konfirmasi telah berakhir. Silakan kirim ulang laporan.');
+            try {
+                const doc = await db.collection('telegram_pending_drafts').doc(draftId).get();
+                if (doc.exists) {
+                    draft = doc.data();
+                    pendingDrafts.set(draftId, draft);
+                }
+            } catch (err) {
+                console.error('[FETCH_DRAFT_FIRESTORE_ERR]', err.message);
+            }
         }
 
-        if (ctx.from.id !== draft.userId) {
+        if (!draft) {
+            return await ctx.editMessageText('Sesi konfirmasi telah berakhir atau draf tidak ditemukan.');
+        }
+
+        const isOwner = ctx.from.id === draft.userId;
+        const isOldDraft = Date.now() - new Date(draft.createdAt).getTime() > 60 * 60 * 1000;
+
+        if (!isOwner && !isOldDraft) {
             try {
-                return await ctx.answerCbQuery('Hanya pengirim yang dapat menyimpan data ini.', { show_alert: true });
+                return await ctx.answerCbQuery('Hanya pengirim yang dapat menyimpan data ini selama 1 jam pertama.', { show_alert: true });
             } catch (e) { return; }
         }
 
@@ -1985,6 +2013,9 @@ Konsol Billing GCP: https://console.cloud.google.com/billing`;
             }
 
             pendingDrafts.delete(draftId);
+            try {
+                await db.collection('telegram_pending_drafts').doc(draftId).delete();
+            } catch (e) {}
 
         } catch (err) {
             console.error('[CONFIRM_SAVE_ERR]', err);
@@ -1998,15 +2029,34 @@ Konsol Billing GCP: https://console.cloud.google.com/billing`;
         } catch (e) {}
 
         const draftId = ctx.match[1];
-        const draft = pendingDrafts.get(draftId);
+        let draft = pendingDrafts.get(draftId);
+
+        if (!draft) {
+            try {
+                const doc = await db.collection('telegram_pending_drafts').doc(draftId).get();
+                if (doc.exists) {
+                    draft = doc.data();
+                    pendingDrafts.set(draftId, draft);
+                }
+            } catch (err) {
+                console.error('[FETCH_DRAFT_FIRESTORE_ERR]', err.message);
+            }
+        }
 
         if (draft) {
-            if (ctx.from.id !== draft.userId) {
+            const isOwner = ctx.from.id === draft.userId;
+            const isOldDraft = Date.now() - new Date(draft.createdAt).getTime() > 60 * 60 * 1000;
+
+            if (!isOwner && !isOldDraft) {
                 try {
-                    return await ctx.answerCbQuery('Hanya pengirim yang dapat membatalkan ini.', { show_alert: true });
+                    return await ctx.answerCbQuery('Hanya pengirim yang dapat membatalkan ini selama 1 jam pertama.', { show_alert: true });
                 } catch (e) { return; }
             }
+
             pendingDrafts.delete(draftId);
+            try {
+                await db.collection('telegram_pending_drafts').doc(draftId).delete();
+            } catch (e) {}
         }
 
         await ctx.editMessageText('Proses pengisian laporan telah dibatalkan. Data tidak disimpan ke spreadsheet.');
@@ -2018,20 +2068,40 @@ Konsol Billing GCP: https://console.cloud.google.com/billing`;
         } catch (e) {}
 
         const draftId = ctx.match[1];
-        const draft = pendingDrafts.get(draftId);
+        let draft = pendingDrafts.get(draftId);
 
         if (!draft) {
-            return await ctx.editMessageText('Sesi konfirmasi telah berakhir. Silakan kirim ulang laporan.');
+            try {
+                const doc = await db.collection('telegram_pending_drafts').doc(draftId).get();
+                if (doc.exists) {
+                    draft = doc.data();
+                    pendingDrafts.set(draftId, draft);
+                }
+            } catch (err) {
+                console.error('[FETCH_DRAFT_FIRESTORE_ERR]', err.message);
+            }
         }
 
-        if (ctx.from.id !== draft.userId) {
+        if (!draft) {
+            return await ctx.editMessageText('Sesi konfirmasi telah berakhir atau draf tidak ditemukan.');
+        }
+
+        const isOwner = ctx.from.id === draft.userId;
+        const isOldDraft = Date.now() - new Date(draft.createdAt).getTime() > 60 * 60 * 1000;
+
+        if (!isOwner && !isOldDraft) {
             try {
-                return await ctx.answerCbQuery('Hanya pengirim yang dapat mengedit data ini.', { show_alert: true });
+                return await ctx.answerCbQuery('Hanya pengirim yang dapat mengedit data ini selama 1 jam pertama.', { show_alert: true });
             } catch (e) { return; }
         }
 
         const cmdName = draft.commandType;
         const copyText = `/${cmdName}\n${draft.rawInput}`;
+
+        pendingDrafts.delete(draftId);
+        try {
+            await db.collection('telegram_pending_drafts').doc(draftId).delete();
+        } catch (e) {}
 
         // Prompt 1: Instruction
         await ctx.editMessageText('Silakan salin data berikut untuk diedit:');
@@ -2461,8 +2531,9 @@ function startBackgroundHealthChecker() {
 }
 
 const telegramSentReminders = {
-    soft: null, // Format: 'YYYY-MM-DD'
-    hard: null  // Format: 'YYYY-MM-DD'
+    soft: null,             // Format: 'YYYY-MM-DD'
+    hard: null,             // Format: 'YYYY-MM-DD'
+    pendingReminder: null   // Format: 'YYYY-MM-DD'
 };
 
 async function loadSentReminders() {
@@ -2472,6 +2543,7 @@ async function loadSentReminders() {
             const data = doc.data();
             telegramSentReminders.soft = data.soft || null;
             telegramSentReminders.hard = data.hard || null;
+            telegramSentReminders.pendingReminder = data.pendingReminder || null;
             console.log('[TELEGRAM_SCHEDULER] Loaded sent reminders state from Firestore:', telegramSentReminders);
         }
     } catch (err) {
@@ -2484,10 +2556,96 @@ async function saveSentReminders() {
         await db.collection('scheduler_state').doc('reminders').set({
             soft: telegramSentReminders.soft,
             hard: telegramSentReminders.hard,
+            pendingReminder: telegramSentReminders.pendingReminder,
             updatedAt: new Date()
         });
     } catch (err) {
         console.warn('[TELEGRAM_SCHEDULER] Failed to save reminders state to Firestore:', err.message);
+    }
+}
+
+async function checkAndSendPendingDraftsReminders() {
+    try {
+        console.log('[TELEGRAM_SCHEDULER] Checking Firestore for pending drafts...');
+        const snapshot = await db.collection('telegram_pending_drafts').where('status', '==', 'pending').get();
+        if (snapshot.empty) {
+            console.log('[TELEGRAM_SCHEDULER] No pending drafts found.');
+            return;
+        }
+
+        const draftsByBranch = {};
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            const bCode = data.branchCode || 'PM';
+            if (!draftsByBranch[bCode]) draftsByBranch[bCode] = [];
+            draftsByBranch[bCode].push(data);
+        });
+
+        for (const bCode in draftsByBranch) {
+            const branch = BRANCHES[bCode.toUpperCase()] || Object.values(BRANCHES).find(b => b.code === bCode);
+            if (!branch) continue;
+
+            const drafts = draftsByBranch[bCode];
+            let targetChatId = process.env[`TELEGRAM_CHAT_ID_${branch.code}`];
+            if (!targetChatId) {
+                try {
+                    const chatDoc = await db.collection('telegram_chats').doc(branch.code).get();
+                    if (chatDoc.exists) {
+                        targetChatId = chatDoc.data().chatId;
+                    }
+                } catch (e) {
+                    console.error(`[TELEGRAM_SCHEDULER] Failed to get chat ID for ${branch.code}:`, e.message);
+                }
+            }
+
+            if (!targetChatId) {
+                console.warn(`[TELEGRAM_SCHEDULER] No chat ID found for branch ${branch.code}. Skipping reminder.`);
+                continue;
+            }
+
+            const botInstance = activeBots.find(b => b.token === branch.token);
+            if (!botInstance) {
+                console.warn(`[TELEGRAM_SCHEDULER] No active bot instance found for branch ${branch.code}. Skipping reminder.`);
+                continue;
+            }
+
+            let msgText = `⚠️ *LAPORAN TERTUNDA BELUM DISUBMIT (${branch.code})*\n`;
+            msgText += `----------------------------------------\n`;
+            msgText += `Berikut adalah laporan kemarin yang sudah diinput staff tetapi belum dikonfirmasi (Simpan):\n\n`;
+
+            const inlineKeyboard = [];
+
+            drafts.forEach(draft => {
+                const titleStr = draft.commandType === 'produksi' ? 'Produksi' : (draft.commandType === 'waste' ? 'Waste' : 'Daily SO');
+                msgText += `📅 *${titleStr} (${draft.dateRaw})*\n`;
+                msgText += `✍️ Pengisi: ${draft.senderName || 'Staff'}\n`;
+                
+                if (draft.aiResult && Array.isArray(draft.aiResult.items)) {
+                    draft.aiResult.items.forEach(item => {
+                        const name = item.matchedName || item.typed;
+                        msgText += `- ${name}: ${item.quantity}\n`;
+                    });
+                }
+                msgText += `\n`;
+
+                inlineKeyboard.push([
+                    { text: `📥 Simpan ${titleStr} (${draft.dateRaw})`, callback_data: `confirm_save:${draft.draftId}` },
+                    { text: `❌ Hapus`, callback_data: `confirm_cancel:${draft.draftId}` }
+                ]);
+            });
+
+            msgText += `Silakan klik tombol di bawah ini untuk memproses simpan ke Google Sheets.`;
+
+            await botInstance.telegram.sendMessage(targetChatId, msgText, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: inlineKeyboard
+                }
+            });
+            console.log(`[TELEGRAM_SCHEDULER] Sent morning pending drafts reminder to ${branch.code} (Chat ID: ${targetChatId})`);
+        }
+    } catch (err) {
+        console.error('[TELEGRAM_SCHEDULER] Error checking pending drafts:', err.message);
     }
 }
 
@@ -2511,6 +2669,16 @@ async function startTelegramScheduler() {
             const dayStr = dateParts.find(p => p.type === 'day').value;
             const dateKey = `${yearStr}-${monthStr}-${dayStr}`;
             const currentDayInt = parseInt(dayStr, 10);
+
+            // 0. Morning Pending Drafts Reminder: 08:00 WIB
+            if (hour === 8 && minute === 0) {
+                if (telegramSentReminders.pendingReminder !== dateKey) {
+                    telegramSentReminders.pendingReminder = dateKey;
+                    await saveSentReminders();
+                    console.log(`[TELEGRAM_SCHEDULER] Triggering 08:00 WIB Pending Drafts check for date: ${dateKey}`);
+                    await checkAndSendPendingDraftsReminders();
+                }
+            }
 
             // 1. Soft Reminder: 21:45 WIB
             if (hour === 21 && minute === 45) {
