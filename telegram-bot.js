@@ -97,6 +97,26 @@ async function generateContentWithTimeout(modelName, prompt, timeoutMs = 30000) 
     return Promise.race([apiCall, timeoutPromise]);
 }
 
+async function callAiWithRetry(modelName, prompt, retries = 3, delayMs = 2000) {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            console.log(`[AI_RETRY] Calling model ${modelName}, attempt ${attempt}/${retries}...`);
+            const response = await generateContentWithTimeout(modelName, prompt);
+            if (response && response.text) {
+                return response;
+            }
+        } catch (err) {
+            lastErr = err;
+            console.warn(`[AI_RETRY_ERR] Model ${modelName} attempt ${attempt}/${retries} failed:`, err.message);
+            if (attempt < retries) {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+    }
+    throw lastErr || new Error('All retry attempts failed');
+}
+
 const db = new Firestore({
     projectId: process.env.GCP_PROJECT_ID || undefined
 });
@@ -1193,6 +1213,8 @@ Aturan Penting Alias Shorthand:
             }
 
             let aiResult = null;
+            let aiFailed = false;
+
             if (preParsedSuccess && preParsedItems.length > 0) {
                 aiResult = { items: preParsedItems };
                 console.log(`[PRE-PARSER] Sukses bypass AI untuk ${commandType} ${branch.code}. Hemat Token!`);
@@ -1221,20 +1243,32 @@ Aturan Penting Alias Shorthand:
 
                 for (const modelName of getModelsForUser(ctx.from.id)) {
                     try {
-                        const response = await generateContentWithTimeout(modelName, systemPrompt);
+                        const response = await callAiWithRetry(modelName, systemPrompt, 3, 1500);
                         aiResult = parseJsonFromAi(response.text || '');
                         if (aiResult && Array.isArray(aiResult.items)) {
                             trackTokenUsage(ctx.from.id, `${commandType}_ai`, response.usageMetadata);
                             break;
                         }
                     } catch (e) {
-                        console.warn(`[GEMINI_${modelName}] Failed:`, e.message);
+                        console.warn(`[GEMINI_${modelName}] Failed all retries:`, e.message);
                     }
                 }
             }
 
             if (!aiResult || !Array.isArray(aiResult.items) || aiResult.items.length === 0) {
-                return await ctx.reply('❌ Gagal menganalisis data dengan AI.');
+                aiFailed = true;
+                // Construct fallback items
+                const fallbackItems = [];
+                for (const line of inputLines) {
+                    const parts = line.trim().split(/\s+/);
+                    const quantityStr = parts.pop();
+                    const quantity = parseFloat(quantityStr.replace(',', '.'));
+                    const typedName = parts.join(' ').trim();
+                    if (!isNaN(quantity) && typedName) {
+                        fallbackItems.push({ typed: typedName, matchedName: null, quantity });
+                    }
+                }
+                aiResult = { items: fallbackItems, isFallback: true };
             }
 
             // Save draft
@@ -1260,6 +1294,15 @@ Aturan Penting Alias Shorthand:
             }
 
             pendingDrafts.set(draftId, draftData);
+
+            if (aiFailed) {
+                return await ctx.reply(
+                    `⚠️ *Koneksi Server AI Sedang Padat/Antre*\n\n` +
+                    `Sistem mendeteksi bahwa jalur AI saat ini sedang sangat sibuk. Namun, jangan khawatir! **Laporan Anda telah berhasil kami simpan sebagai DRAF TERTUNDA** di server secara aman.\n\n` +
+                    `Laporan ini tidak hilang dan akan kami ingatkan kembali besok pagi pukul 08:00 WIB melalui pesan konfirmasi otomatis untuk langsung disimpan ke Google Sheets.`,
+                    { parse_mode: 'Markdown' }
+                );
+            }
 
             // Format summary items
             let itemsSummary = '';
